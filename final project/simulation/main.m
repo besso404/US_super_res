@@ -7,7 +7,7 @@ F = 10;            %[MHz]
 Z = 1000;          %[um]
 C = 9e-4;          %[#bubbles/um^3]
 Csound = 1540*1e6; %[um/sec]
-psf_resolution = 30; 
+psf_resolution = 15; 
 Ncycles = 1;      
 iter_num = 200; 
 ppm = 0.1;         %[pixel/um]
@@ -29,19 +29,25 @@ R_blur = ceil(FWHM);
 
 %% Image declaration 
 image = zeros(FOVy_, FOVx_);
-sample = zeros(FOVy_, FOVx_);
+sample = double(zeros(FOVy_, FOVx_));
 true_image = zeros(FOVy_, FOVx_);
 true_image(up_lim:down_lim,:) = 1;
 
 %% Simulation
-figure
 
-subplot(1,3,1)
-imagesc(true_image);
-subplot(1,3,2)
-imagesc(sample);
-subplot(1,3,3)
-imagesc(image);
+figure
+a1 = subplot(1,3,1);
+h1 = imshow(true_image);
+set(get(a1, 'title'), 'string', 'True Image of Blood Vessel');
+
+a2 = subplot(1,3,2);
+h2 = imshow(sample);
+set(get(a2, 'title'), 'string', 'Sampled Image of Blood Vessel');
+
+a3 = subplot(1,3,3);
+h3 = imshow(image);
+set(get(a3, 'title'), 'string',...
+                        'Reconstructed SuperRes Image of Blood Vessel');
 
 for t=1:iter_num
     x = randsample(X_population,bubbles_num,true);
@@ -64,9 +70,9 @@ for t=1:iter_num
 %     peaks = imdilate(peaks,circ);
     sample = sample + mask;
     image = image + peaks;
-    display(t)
-    subplot(1,3,2)
-    imagesc(sample);
-    subplot(1,3,3)
-    imagesc(image);
+    
+    suptitle(join(["Iteration #", int2str(t)]));
+    set(h2, 'CData', mask); 
+    set(h3, 'CData', image); 
+    drawnow;
 end
