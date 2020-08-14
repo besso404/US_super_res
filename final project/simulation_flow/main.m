@@ -8,12 +8,12 @@ Z = 1000;                       %[um]
 Csound = 1540*1e6;              %[um/sec]
 psf_resolution = 15; 
 Ncycles = 1;      
-sim_len = 1500; 
+sim_len = 5000; 
 ppm = 0.1;                      %[pixel/um]
 
 u = normrnd(33333,3205);        %[um/sec]
 v = normrnd(0,10);              %[um/sec]
-FR = 300;                       %[Hz]
+FR = 300;                       %[frame/sec]
 epsilon = 0.1;                  %[sec]
 
 %% Calculated parameters
@@ -28,7 +28,8 @@ psf = psf./max(psf(:));
 up_lim = floor((Z-(D/2))*ppm);
 down_lim = ceil((Z+(D/2))*ppm);
 R_blur = ceil(FWHM);
-dt = 1/FR;                       %[sec]
+dt = 1/FR;                       %[sec/frame]
+sigma_y = (D/2)^0.5;             %[um^0.5]
 
 %% Image declaration 
 background = zeros(FOVy_, FOVx_);
@@ -60,32 +61,42 @@ set(get(a3, 'title'), 'string',...
                         'Reconstructed SuperRes Image of Blood Vessel');
 
 bubbles = [struct('y', floor(unifrnd(Z-D/2+1,Z+D/2)*ppm), 'x', 1,...
-    'u', floor(normrnd(33333,3205)*ppm),...
-    'v', floor(normrnd(0,10)*ppm)  , 't0', 1)]; 
+    'u', floor(normrnd(33333,3205)*ppm*dt),...
+    'v', floor(normrnd(0,10)*ppm*dt)  , 't0', 1)]; 
 
 exitted_frame = 0;
 
+%LK - optical flow
+opticFlow = opticalFlowLK('NoiseThreshold',0.05);
+h4 = figure;
+movegui(h4);
+hViewPanel = uipanel(h4);
+hViewPanel.Title = 'LK optical flow';
+hViewPanel.Position = [0 0 1 1];
+hPlot = axes(hViewPanel);
+
+                    
 for t = 1:sim_len
     
     mask = zeros(FOVx_, FOVy_);
     
-    if (mod(t, 100) == 0)
+    if (mod(t, 20) == 0)
         bubbles = [bubbles; struct('y', floor(unifrnd(Z-D/2+1,Z+D/2)*ppm),...
-            'x', 1, 'u', floor(normrnd(33333,3205)*ppm),...
-            'v', floor(normrnd(0,10)*ppm), 't0', t)]; 
+            'x', 1, 'u', floor(normrnd(33333,3205)*ppm*dt),...
+            'v', floor(normrnd(0,10)*ppm*dt), 't0', t)]; 
     end
     
     for b=1:length(bubbles)
         
-        bubbles(b).y = bubbles(b).y + (t-bubbles(b).t0)*dt*bubbles(b).v*ppm;
+        bubbles(b).y = bubbles(b).y + (t-bubbles(b).t0)*bubbles(b).v;
 
-        bubbles(b).x = 1 + (t-bubbles(b).t0)*dt*bubbles(b).u*ppm;
+        bubbles(b).x = 1 + (t-bubbles(b).t0)*bubbles(b).u;
 
         if (bubbles(b).y < up_lim + abs(v)*ppm || bubbles(b).y > down_lim - abs(v)*ppm)
             [bubbles(b).u,bubbles(b).v] = elastic_collision(bubbles(b).u,bubbles(b).v);
         end
         
-        if (bubbles(b).x > FOVx_ - dt*bubbles(b).u*ppm)
+        if (bubbles(b).x > FOVx_ - bubbles(b).u)
             exitted_frame = b;
         end
 
@@ -107,6 +118,14 @@ for t = 1:sim_len
         bubbles(exitted_frame,:) = [];
         exitted_frame = 0;
     end
-    
+    flow = estimateFlow(opticFlow,sample_im);
+    v_ = sprintf('%.2f',mean(mean(flow.Vy(flow.Vy~=0))));
+    u_ = sprintf('%.2f',mean(mean(flow.Vx(flow.Vx~=0))));
+    title_str = join(["Iteration #", int2str(t)," u:" , u_, " v:",v_]);
+    imshow(sample_im)
+    hold on
+    plot(flow,'DecimationFactor',[5 5],'ScaleFactor',10,'Parent',hPlot);
+    hViewPanel.Title = title_str;
+    hold off
 end
 
