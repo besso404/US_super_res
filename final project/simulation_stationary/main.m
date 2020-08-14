@@ -49,6 +49,9 @@ h3 = imshow(image);
 set(get(a3, 'title'), 'string',...
                         'Reconstructed SuperRes Image of Blood Vessel');
 
+boundx = (size(psf,1)-1)/2;
+boundy = (size(psf,2)-1)/2;
+
 for t=1:iter_num
     x = randsample(X_population,bubbles_num,true);
     y = randsample(Y_population,bubbles_num,true);
@@ -65,11 +68,19 @@ for t=1:iter_num
         end
     end
     mask = conv2(mask,psf,'same'); 
-    peaks = imregionalmax(mask); 
-%     circ = strel('disk', 3);
-%     peaks = imdilate(peaks,circ);
+    
+    % Correlation Method
+    corr = xcorr2(mask,psf); 
+    corr = corr(boundsx:size(corr,1)-boundsx-1,boundsy:size(corr,2)-boundsy-1);
+    corr = imregionalmax(corr);
+    
     sample = sample + mask;
-    image = image + peaks;
+    image = image + corr;
+    
+%     % RegionMax Method
+%     peaks = imregionalmax(mask); 
+%     sample = sample + mask;
+%     image = image + peaks;
     
     suptitle(join(["Iteration #", int2str(t)]));
     set(h2, 'CData', mask); 
