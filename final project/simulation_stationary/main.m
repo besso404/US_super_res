@@ -49,8 +49,8 @@ h3 = imshow(image);
 set(get(a3, 'title'), 'string',...
                         'Reconstructed SuperRes Image of Blood Vessel');
 
-boundx = (size(psf,1)-1)/2;
-boundy = (size(psf,2)-1)/2;
+boundsx = (size(psf,1)-1)/2;
+boundsy = (size(psf,2)-1)/2;
 
 for t=1:iter_num
     x = randsample(X_population,bubbles_num,true);
