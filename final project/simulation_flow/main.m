@@ -5,32 +5,38 @@ W = 5000;                       %[um] - transducer width
 D = 500;                        %[um] - vessel diameter
 F = 10;                         %[MHz]
 Z = 1000;                       %[um]
+Z0 = 10000;                     %[um]
 Csound = 1540*1e6;              %[um/sec]
 psf_resolution = 15; 
 Ncycles = 1;      
 sim_len = 5000; 
 ppm = 0.1;                      %[pixel/um]
-
 mu_u = 33333;                   %[um/sec]
-u = normrnd(mu_u,3205);        %[um/sec]
+u = normrnd(mu_u,3205);         %[um/sec]
 v = normrnd(0,20);              %[um/sec]
 FR = 300;                       %[frame/sec]
 epsilon = 0.1;                  %[sec]
 
 %% Calculated parameters
-
 lamda = Csound/(F*1e6);         %[um]
-FWHM = 0.886*ppm*lamda*Z/W;     %[um]
-sigma = 2.355*FWHM;             %[um]
+FWHM_lat = 0.886*ppm*lamda*Z0/W; %[pixel]
+sigma_lat = FWHM_lat/2.355;     %[pixel]
 FOVx_ = floor(FOVx*ppm);
 FOVy_ = floor(FOVy*ppm);
-psf = fspecial('gaussian', psf_resolution, sigma);
-psf = psf./max(psf(:));
+FWHM_ax = Ncycles*lamda*ppm/2;  %[pixel]
+sigma_ax = FWHM_ax/2.355;       %[pixel]
 up_lim = floor((Z-(D/2))*ppm);
 down_lim = ceil((Z+(D/2))*ppm);
-R_blur = ceil(FWHM);
 dt = 1/FR;                       %[sec/frame]
 sigma_y = (D/2)^0.5;             %[um^0.5]
+
+
+%% psf 
+psf_lat = gaussmf(floor(-psf_resolution/2)+1:floor(psf_resolution/2)...
+    ,[sigma_lat 0]);
+psf_ax = gaussmf(floor(-psf_resolution/2)+1:floor(psf_resolution/2)...
+    ,[sigma_ax 0]);
+psf = conv2(psf_ax',psf_lat);
 
 %% Image declaration 
 background = zeros(FOVy_, FOVx_);
@@ -61,14 +67,14 @@ h3 = imshow(image);
 set(get(a3, 'title'), 'string',...
                         'Reconstructed SuperRes Image of Blood Vessel');
 
-bubbles = [struct('y', unifrnd(Z-D/2+1,Z+D/2)*ppm, 'x', 1,...
+bubbles = [struct('y', normrnd(Z,(D/2)^0.5)*ppm, 'x', 1,...
     'u', normrnd(mu_u,3205)*ppm*dt,...
     'v', normrnd(0,20)*ppm*dt  , 't0', 1)]; 
 
 exitted_frame = 0;
 
-LK - optical flow
-opticFlow = opticalFlowFarneback();
+%LK - optical flow
+opticFlow = opticalFlowFarneback('NeighborhoodSize',7);
 h4 = figure;
 movegui(h4);
 hViewPanel = uipanel(h4);
@@ -86,8 +92,8 @@ for t = 1:sim_len
     
     mask = zeros(FOVx_, FOVy_);
     
-    if (mod(t, 20) == 0)
-        bubbles = [bubbles; struct('y', unifrnd(Z-D/2+1,Z+D/2)*ppm,...
+    if (mod(t, 5) == 0)
+        bubbles = [bubbles; struct('y', normrnd(Z,(D/2)^0.5)*ppm,...
             'x', 1, 'u', normrnd(mu_u,3205)*ppm*dt,...
             'v', normrnd(0,20)*ppm*dt, 't0', t)]; 
     end
@@ -106,15 +112,18 @@ for t = 1:sim_len
             exitted_frame = b;
         end
 
-        mask(round(bubbles(b).y), round(bubbles(b).x)) = 1;
+        mask(round(bubbles(b).y), min(FOVx_,round(bubbles(b).x))) = 1;
     
     end
     
     image = background + cat(3,conv2(mask, psf, 'same'));
     sample_im = conv2(mask, psf, 'same');
-    
-    corr = xcorr2(mask,psf); 
+    %noise
+    sample_im = imnoise(sample_im,'gaussian');
+    corr = xcorr2(sample_im,psf); 
     corr = corr(boundsx:size(corr,1)-boundsx-1,boundsy:size(corr,2)-boundsy-1);
+    corr = log10(corr+eps(0));
+    corr(corr<max(corr(:))*0.5) = 0;
     corr = imregionalmax(corr);
     
     sample = sample + mask;
@@ -131,21 +140,26 @@ for t = 1:sim_len
         exitted_frame = 0;
     end
     
-    flow = estimateFlow(opticFlow,sample_im);
+    circ = strel('disk',5);
+    dil = imdilate(corr,circ);
+    
+    %flow
+    flow = estimateFlow(opticFlow,dil);
     vy = flow.Vy(flow.Vy~=0);
-    vx = flow.Vx(flow.Magnitude > 0.75);
+    vx = flow.Vx(flow.Magnitude > 1);
     
     v_ = sprintf('%.2f',mean(vy(:)));
     U_ = mean(vx(:));
     U = [U; U_];
     u_ = sprintf('%.2f',mean(vx(:)));
-    title_str = join(["Iteration #", int2str(t)," u:" , u_, " v:",v_]);
-    imshow(sample_im)
+    title_str = join(["Iteration #", int2str(t)," u:" , u_,...
+        " [pixel/frame], v:", v_, " [pixel/frame]"]);
+    imshow(dil)
     hold on
-    plot(flow,'DecimationFactor',[15 15],'ScaleFactor',10,'Parent',hPlot);
+    plot(flow,'DecimationFactor',[50 10],'ScaleFactor',3,'Parent',hPlot);
     hViewPanel.Title = title_str;
     hold off
 end
 
 figure;
-histogram(U);
+histogram(U,50)
