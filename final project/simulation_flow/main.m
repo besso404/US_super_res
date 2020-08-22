@@ -2,20 +2,22 @@
 FOVx = 5000;                    %[um]
 FOVy = 5000;                    %[um]
 W = 5000;                       %[um] - transducer width
-D = 500;                        %[um] - vessel diameter
+D = 15;                         %[um] - vessel diameter
 F = 10;                         %[MHz]
 Z = 1000;                       %[um]
 Z0 = 10000;                     %[um]
 Csound = 1540*1e6;              %[um/sec]
-psf_resolution = 15; 
+psf_resolution = 50; 
 Ncycles = 1;      
 sim_len = 5000; 
 ppm = 0.1;                      %[pixel/um]
-mu_u = 33333;                   %[um/sec]
-u = normrnd(mu_u,3205);         %[um/sec]
-v = normrnd(0,20);              %[um/sec]
-FR = 300;                       %[frame/sec]
-epsilon = 0.1;                  %[sec]
+mu_u = 1040;                    %[um/sec]
+std_u = 100;                    %[um/sec]     
+std_v = 0.5;
+u = normrnd(mu_u,std_u);          %[um/sec]
+v = normrnd(0,std_v);              %[um/sec]
+FR = 30;                       %[frame/sec]
+
 
 %% Calculated parameters
 lamda = Csound/(F*1e6);         %[um]
@@ -32,10 +34,10 @@ sigma_y = (D/2)^0.5;             %[um^0.5]
 
 
 %% psf 
-psf_lat = gaussmf(floor(-psf_resolution/2)+1:floor(psf_resolution/2)...
-    ,[sigma_lat 0]);
-psf_ax = gaussmf(floor(-psf_resolution/2)+1:floor(psf_resolution/2)...
-    ,[sigma_ax 0]);
+psf_lat = easygauss(floor(-psf_resolution/2)+1:floor(psf_resolution/2)...
+    , 0, sigma_lat);
+psf_ax = easygauss(floor(-psf_resolution/2)+1:floor(psf_resolution/2)...
+    , 0, sigma_ax);
 psf = conv2(psf_ax',psf_lat);
 
 %% Image declaration 
@@ -53,34 +55,40 @@ background = true_image;
 
 %% Simulation
 
-figure
-a1 = subplot(1,3,1);
+f = figure;
+a1 = subplot(2,2,1);
 h1 = imshow(true_image);
 set(get(a1, 'title'), 'string', 'True Image of Blood Vessel - flow');
 
-a2 = subplot(1,3,2);
+a2 = subplot(2,2,2);
 h2 = imshow(sample);
 set(get(a2, 'title'), 'string', 'Sampled Image of Blood Vessel');
 
-a3 = subplot(1,3,3);
+a3 = subplot(2,2,3);
 h3 = imshow(image);
 set(get(a3, 'title'), 'string',...
                         'Reconstructed SuperRes Image of Blood Vessel');
 
-bubbles = [struct('y', normrnd(Z,(D/2)^0.5)*ppm, 'x', 1,...
-    'u', normrnd(mu_u,3205)*ppm*dt,...
-    'v', normrnd(0,20)*ppm*dt  , 't0', 1)]; 
-
-exitted_frame = 0;
-
 %LK - optical flow
 opticFlow = opticalFlowFarneback('NeighborhoodSize',7);
-h4 = figure;
-movegui(h4);
-hViewPanel = uipanel(h4);
-hViewPanel.Title = 'LK optical flow';
-hViewPanel.Position = [0 0 1 1];
+a4 = subplot(2,2,4);
+set(gca, 'xtick', []);
+set(gca, 'ytick', []);
+set(get(a4, 'title'), 'string',...
+                        'Farneback Optical Flow');
+movegui(f);
+hViewPanel = uipanel(f);
+hViewPanel.Position = get(a4,'Position');
 hPlot = axes(hViewPanel);
+
+
+
+
+bubbles = [struct('y', normrnd(Z,(D/2)^0.5)*ppm, 'x', 1,...
+    'u', normrnd(mu_u,std_u)*ppm*dt,...
+    'v', normrnd(0,std_v)*ppm*dt  , 't0', 1)]; 
+
+exitted_frame = 0;
 
 
 boundsx = (size(psf,1)-1)/2;
@@ -92,10 +100,10 @@ for t = 1:sim_len
     
     mask = zeros(FOVx_, FOVy_);
     
-    if (mod(t, 5) == 0)
+    if (mod(t, 30) == 0)
         bubbles = [bubbles; struct('y', normrnd(Z,(D/2)^0.5)*ppm,...
-            'x', 1, 'u', normrnd(mu_u,3205)*ppm*dt,...
-            'v', normrnd(0,20)*ppm*dt, 't0', t)]; 
+            'x', 1, 'u', normrnd(mu_u,std_u)*ppm*dt,...
+            'v', normrnd(0,std_v)*ppm*dt, 't0', t)]; 
     end
     
     for b=1:length(bubbles)
@@ -123,7 +131,7 @@ for t = 1:sim_len
     corr = xcorr2(sample_im,psf); 
     corr = corr(boundsx:size(corr,1)-boundsx-1,boundsy:size(corr,2)-boundsy-1);
     corr = log10(corr+eps(0));
-    corr(corr<max(corr(:))*0.5) = 0;
+    corr(corr<max(corr(:))*0.8) = 0;
     corr = imregionalmax(corr);
     
     sample = sample + mask;
@@ -133,7 +141,7 @@ for t = 1:sim_len
     set(h1, 'CData', image);
     set(h2, 'CData', sample_im);
     set(h3, 'CData', recon_im);
-    drawnow;
+    
     
     if (exitted_frame > 0)
         bubbles(exitted_frame,:) = [];
@@ -152,13 +160,16 @@ for t = 1:sim_len
     U_ = mean(vx(:));
     U = [U; U_];
     u_ = sprintf('%.2f',mean(vx(:)));
+    
     title_str = join(["Iteration #", int2str(t)," u:" , u_,...
         " [pixel/frame], v:", v_, " [pixel/frame]"]);
-    imshow(dil)
+    
+    imshow(dil);
     hold on
-    plot(flow,'DecimationFactor',[50 10],'ScaleFactor',3,'Parent',hPlot);
-    hViewPanel.Title = title_str;
+    plot(flow,'DecimationFactor',[50 10],'ScaleFactor',10,'Parent',hPlot);
+    hViewPanel.Title = title_str;  
     hold off
+    drawnow;
 end
 
 figure;
