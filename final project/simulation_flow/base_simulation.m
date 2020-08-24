@@ -64,7 +64,7 @@ bar_mask(round(0.9*size(bar_mask,1)):round(0.9*size(bar_mask,1))+1,...
     round(0.1*size(bar_mask,2))+1:round(0.1*size(bar_mask,2))+mm) = ...
     ones(2,mm);
 
-%% Simulation
+%% Display / Setup
 
 f = figure;
 a1 = subplot(2,2,1);
@@ -93,7 +93,7 @@ hViewPanel.Position = get(a4,'Position');
 hPlot = axes(hViewPanel);
 
 %bubbles declaration
-bubbles = [struct('y', normrnd(Z,(D/2)^0.5)*ppm, 'x', 1,...
+bubbles = [struct('y', normrnd(Z,(D/2)^0.5)*ppm, 'x', 1, ...
     'u', normrnd(mu_u,std_u)*ppm*dt,...
     'v', normrnd(0,std_v)*ppm*dt  , 't0', 1)]; 
 real_U = [real_U; bubbles.u];
@@ -109,9 +109,9 @@ boundsy = (size(psf,2)-1)/2;
 U = [];
 V = [];
 
-%Videowriter
+% Videowriter
 if to_record
-    vid_title =  join(['Flow simulation - FR - ', int2str(FR),...
+    vid_title = join(['Flow simulation - FR - ', int2str(FR), ...
             ', number of iterations - ' , int2str(sim_len), '.avi']);
     vid = VideoWriter(vid_title, 'Motion JPEG AVI');
     vid.FrameRate = 10;
@@ -122,6 +122,7 @@ ann = annotation('textbox', [0.47 0.5 0.1 0.1],'String',...
    num2str(0,'Test text %d'),'EdgeColor', 'none','HorizontalAlignment', 'center');
 
 
+%% Simulation
 for t = 1:sim_len
     
     set(ann, 'string', join(["Iteration #", int2str(t)]));
