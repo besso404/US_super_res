@@ -6,7 +6,7 @@ W = 5000;                       %[um] - transducer width
 D = 15;                         %[um] - vessel diameter
 F = 10;                         %[MHz]
 Z1 = 1000;                       %[um]
-Z2 = 1100;                       %[um]
+Z2 = 1150;                       %[um]
 Z0 = 10000;                     %[um]
 Csound = 1540*1e6;              %[um/sec]
 psf_resolution = 50;
@@ -19,6 +19,7 @@ std_v = 0.5;
 u = normrnd(mu_u,std_u);        %[um/sec]
 v = normrnd(0,std_v);           %[um/sec]
 FR = 30;                        %[frame/sec]
+to_record = false;
 
 %% Calculated parameters
 lamda = Csound/(F*1e6);         %[um]
@@ -73,7 +74,7 @@ bar_mask(round(0.9*size(bar_mask,1)):round(0.9*size(bar_mask,1))+1,...
 
 %% Display / Setup
 
-f = figure;
+f = figure
 a1 = subplot(2,2,1);
 h1 = imshow(true_image);
 set(get(a1, 'title'), 'string', 'True Image of Blood Vessels - flow');
@@ -88,16 +89,16 @@ set(get(a3, 'title'), 'string',...
                         'Reconstructed SuperRes Image of Blood Vessels');
 
 %LK - optical flow
-% opticFlow = opticalFlowFarneback('NeighborhoodSize', 7,'NumPyramidLevels', 4);
-% a4 = subplot(2,2,4);
-% set(gca, 'xtick', []);
-% set(gca, 'ytick', []);
-% set(get(a4, 'title'), 'string',...
-%                         'Farneback Optical Flow');
-% movegui(f);
-% hViewPanel = uipanel(f);
-% hViewPanel.Position = get(a4,'Position');
-% hPlot = axes(hViewPanel);
+opticFlow = opticalFlowFarneback('NeighborhoodSize', 7,'NumPyramidLevels', 3);
+a4 = subplot(2,2,4);
+set(gca, 'xtick', []);
+set(gca, 'ytick', []);
+set(get(a4, 'title'), 'string',...
+                        'Farneback Optical Flow');
+movegui(f);
+hViewPanel = uipanel(f);
+hViewPanel.Position = get(a4,'Position');
+hPlot = axes(hViewPanel);
 
 %bubbles declaration
 bubbles1 = [struct('y', normrnd(Z1,(D/2)^0.5)*ppm, 'x', 1, ...
@@ -108,8 +109,10 @@ bubbles2 = [struct('y', normrnd(Z2,(D/2)^0.5)*ppm, 'x', FOVx_, ...
     'u', normrnd(mu_u,std_u)*ppm*dt,...
     'v', normrnd(0,std_v)*ppm*dt  , 't0', 1)]; 
 
-real_U = [real_U; bubbles1.u];
-real_v = [real_V; bubbles1.v];
+real_U = [real_U; bubbles1.u bubbles2.u*-1];
+real_V = [real_V; bubbles1.v bubbles2.v];
+
+
 
 exitted_frame1 = 0;
 exitted_frame2 = 0;
@@ -119,12 +122,22 @@ boundsx = ceil((size(psf,1)-1)/2);
 boundsy = ceil((size(psf,2)-1)/2);
 
 % Collect U and V sampling
-U = [];
+U1 = [];
 V = [];
+U2 = [];
 
+% Videowriter
+if to_record
+    vid_title = join(['Flow simulation - FR - ', int2str(FR), ...
+            ', number of iterations - ' , int2str(sim_len), '.avi']);
+    vid = VideoWriter(vid_title, 'Motion JPEG AVI');
+    vid.FrameRate = 30;
+    open(vid);
+end
 
 ann = annotation('textbox', [0.47 0.5 0.1 0.1],'String',...
    num2str(0,'Test text %d'),'EdgeColor', 'none','HorizontalAlignment', 'center');
+
 
 %% Simulation
 for t = 1:sim_len
@@ -140,6 +153,8 @@ for t = 1:sim_len
         bubbles2 = [bubbles2; struct('y', normrnd(Z2,(D/2)^0.5)*ppm,...
             'x', FOVx_, 'u', normrnd(mu_u,std_u)*ppm*dt,...
             'v', normrnd(0,std_v)*ppm*dt, 't0', t)]; 
+        real_U = [real_U; bubbles1(end).u bubbles2(end).u*-1];
+        real_V = [real_V; bubbles1(end).v bubbles2(end).v];
     end
     
     for b=1:length(bubbles1)
@@ -211,25 +226,76 @@ for t = 1:sim_len
     dil = imdilate(corr,circ2);
     
     %flow
-%     flow = estimateFlow(opticFlow,dil);
-%     vy = flow.Vy(flow.Vy~=0);
-%     vx = flow.Vx(flow.Magnitude > 1);
-%     
-%     V_= mean(vy(:));
-%     V = [V; V_];
-%     v_ = sprintf('%.2f',mean(vy(:)));
-%     U_ = mean(vx(:));
-%     U = [U; U_];
-%     u_ = sprintf('%.2f',mean(vx(:)));
-%     
-%     title_str = join([" u:" , u_, ", v:", v_, " [pixel/frame]"]);
-%     
-%     imshow(dil+bar_mask);
-%     hold on
-%     plot(flow,'DecimationFactor',[50 10],'ScaleFactor',10,'Parent',hPlot);
-%     hViewPanel.Title = title_str;  
-%     hold off
+    flow = estimateFlow(opticFlow,dil);
+    vy = flow.Vy(flow.Vy~=0);
+    vx1 = flow.Vx(flow.Vx > 1);
+    vx2 = flow.Vx(flow.Vx < -1);
+    
+    V_= mean(vy(:));
+    V = [V; V_];
+    v_ = sprintf('%.2f',mean(vy(:)));
+    U1_ = mean(vx1(:));
+    U1 = [U1; U1_];
+    u1_ = sprintf('%.2f',mean(vx1(:)));
+    U2_ = mean(vx2(:));
+    U2 = [U2; U2_];
+    u2_ = sprintf('%.2f',mean(vx2(:)));
+    
+    title_str = join(["U upper:" , u1_, "U lower:" , u2_, " [pixel/frame]"]);
+                
+    imshow(dil+bar_mask);
+    hold on
+    plot(flow,'DecimationFactor',[50 10],'ScaleFactor',10,'Parent',hPlot);
+    hViewPanel.Title = title_str;  
+    hold off
     drawnow;
-
+    
 end
 
+if to_record
+    close(vid);
+end
+
+figure;
+subplot(2,1,1)
+histogram(real_U(:,1),10,'Normalization','probability')
+title('X Axis Velocity Histogram of Upper Vessel - Real');
+xlabel('X Axis Velocity [pixel/frame]');
+ylabel('Normalized Probability');
+subplot(2,1,2)
+histogram(U1(U1>min(real_U(:,1)) & U1<max(real_U(:,1))),10,...
+    'Normalization','probability')
+title('X Axis Velocity Histogram of Upper Vessel - Sampled');
+xlabel('X Axis Velocity [pixel/frame]');
+ylabel('Normalized Probability');
+
+
+figure;
+subplot(2,1,1)
+histogram(real_U(:,2),10,'Normalization','probability')
+title('X Axis Velocity Histogram of Lower Vessel - Real');
+xlabel('X Axis Velocity [pixel/frame]');
+ylabel('Normalized Probability');
+subplot(2,1,2)
+histogram(U2(U2>min(real_U(:,2)) & U2<max(real_U(:,2))),10,...
+    'Normalization','probability')
+title('X Axis Velocity Histogram of Lower Vessel - Sampled');
+xlabel('X Axis Velocity [pixel/frame]');
+ylabel('Normalized Probability');
+
+
+figure;
+subplot(2,1,1)
+histogram(real_V(:),10,'Normalization','probability')
+title('Y Axis Velocity Histogram - Real');
+xlabel('Y Axis Velocity [pixel/frame]');
+ylabel('Normalized Probability');
+subplot(2,1,2)
+histogram(V(V>min(real_V(:)) & V<max(real_V(:))),10,'Normalization','probability')
+title('Y Axis Velocity Histogram - Sampled');
+xlabel('Y Axis Velocity [pixel/frame]');
+ylabel('Normalized Probability');
+
+[mean(real_V(:)) mean(V)]
+[mean(real_U(:,1)) mean(U1(~isnan(U1)))]
+[mean(real_U(:,2)) mean(U2(~isnan(U2)))]
