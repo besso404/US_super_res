@@ -97,7 +97,7 @@ bubbles = [struct('y', normrnd(Z,(D/2)^0.5)*ppm, 'x', 1, ...
     'u', normrnd(mu_u,std_u)*ppm*dt,...
     'v', normrnd(0,std_v)*ppm*dt  , 't0', 1)]; 
 real_U = [real_U; bubbles.u];
-real_v = [real_V; bubbles.v];
+real_V = [real_V; bubbles.v];
 
 exitted_frame = 0;
 
