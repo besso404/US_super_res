@@ -9,61 +9,61 @@ import cv2
 def sim_params():
 
     # Simulation Params
-    FOVx = 5000
-    FOVy = 5000
-    W = 5000
-    D = 15
-    F = 10
-    Z1 = 1000
-    Z2 = 1150
-    Z0 = 10000
-    Csound = 1540*1e6
-    psf_resolution = 50
+    FOVx = 5000                                #[um]
+    FOVy = 5000                                #[um]
+    W = 2500                                   #[um]
+    D = 15                                     #[um]                  
+    F = 10                                     #[MHz]
+    Z1 = 1000                                  #[um]
+    Z2 = 1090                                  #[um]
+    Z0 = 7500                                  #[um]
+    Csound = 1540*1e6                          #[um/sec]
+    psf_resolution = 50                        #[pixels?]
     Ncycles = 1
     sim_len = 3000
-    ppm = 0.1
-    mu_u = 1040
-    std_u = 100
-    std_v = 0.5
-    FR = 30
+    ppm = 0.1                                  #[pixel/um]
+    mu_u = 1040                                #[um/sec]
+    std_u = 100                                #[um/sec]
+    std_v = 0.5                                #[um/sec]
+    FR = 30                                    #[frames/sec]
 
     # Calculated Params
 
-    lamda_ = Csound/(F*1e6)
-    FWHM_lat = 0.886*ppm*lamda_*Z0/W #[pixel]
-    sigma_lat = FWHM_lat/2.355     #[pixel]
-    FOVx_ = int(np.floor(FOVx*ppm))
-    FOVy_ = int(np.floor(FOVy*ppm))
-    FWHM_ax = Ncycles*lamda_*ppm/2   # [pixel]
-    sigma_ax = FWHM_ax/2.355         # [pixel]
-    up_lim1 = int(np.floor((Z1-(D/2))*ppm)) 
-    down_lim1 = int(np.ceil((Z1+(D/2))*ppm))
-    up_lim2 = int(np.floor((Z2-(D/2))*ppm))
-    down_lim2 = int(np.ceil((Z2+(D/2))*ppm))
-    dt = 1/FR                        # [sec/frame]
-    sigma_y = (D/2)**0.5              # [um^0.5]
-
+    lamda_ = Csound/(F*1e6)                    #[um]
+    FWHM_lat = 0.886*ppm*lamda_*Z0/W           #[pixel]
+    sigma_lat = FWHM_lat/2.355                 #[pixel]
+    FOVx_ = int(np.floor(FOVx*ppm))            #[pixel]
+    FOVy_ = int(np.floor(FOVy*ppm))            #[pixel]
+    FWHM_ax = Ncycles*lamda_*ppm/2             #[pixel]
+    sigma_ax = FWHM_ax/2.355                   #[pixel]
+    up_lim1 = int(np.floor((Z1-(D/2))*ppm))    #[pixel]
+    down_lim1 = int(np.ceil((Z1+(D/2))*ppm))   #[pixel]
+    up_lim2 = int(np.floor((Z2-(D/2))*ppm))    #[pixel]
+    down_lim2 = int(np.ceil((Z2+(D/2))*ppm))   #[pixel]
+    dt = 1/FR                                  #[sec/frame]
+    sigma_y = (D/2)**0.5                       #[um^0.5]
+ 
     psf_lat = easygauss(np.linspace(-psf_resolution//2+1,psf_resolution//2), 0, sigma_lat)
     psf_ax = easygauss(np.linspace(-psf_resolution//2+1,psf_resolution//2), 0, sigma_ax)
     psf = convolve2d(psf_ax.T,psf_lat)
 
     return {
-        "FOVx":FOVx_,
-        "FOVy":FOVy_,
-        "ppm":ppm,
-        "dt":dt,
-        "Z1":Z1,
-        "Z2":Z2,
-        "D":D,
-        "sigma_y":sigma_y,
-        "up_lim1":up_lim1,
-        "down_lim1":down_lim1,
-        "up_lim2":up_lim2,
-        "down_lim2":down_lim2,
-        "mu_u":mu_u,
-        "std_u":std_u,
-        "std_v":std_v,
-        "psf":psf,
+        "FOVx":FOVx_,              #[pixel]
+        "FOVy":FOVy_,              #[pixel]
+        "ppm":ppm,                 #[pixel/um]
+        "dt":dt,                   #[sec/frame]
+        "Z1":Z1,                   #[um]    
+        "Z2":Z2,                   #[um]
+        "D":D,                     #[um]
+        "sigma_y":sigma_y,         #[um^0.5]
+        "up_lim1":up_lim1,         #[pixel]
+        "down_lim1":down_lim1,     #[pixel]
+        "up_lim2":up_lim2,         #[pixel]
+        "down_lim2":down_lim2,     #[pixel]
+        "mu_u":mu_u,               #[um/sec]
+        "std_u":std_u,             #[um/sec]
+        "std_v":std_v,             #[um/sec]
+        "psf":psf,             
         "psf_resolution":psf_resolution
     }
 
@@ -78,12 +78,12 @@ def elastic_collision(u0, v0):
 
     return u1, v1
 
-def calc_speed(p1_, p0_, dt_, ppm_):
+def calc_speed(p1_, p0_, fr_, ppm_):
 
     dp = p1_ - p0_
     
-    u = np.mean(dp[:,0])*dt_/ppm_
-    v = np.mean(dp[:,1])*dt_/ppm_
+    u = np.mean(dp[:,0])*fr_/ppm_
+    v = np.mean(dp[:,1])*fr_/ppm_
 
     return (u,v)
 
@@ -123,8 +123,15 @@ def simulator(p, sim_len=1000):
         't0':1
         }]
 
+    bubbles2 = [{
+        'y':np.random.normal(p['Z2'], p['sigma_y'])*p['ppm'],
+        'x':p['FOVx']-1,
+        'u':np.random.normal(p['mu_u'],p['std_u'])*p['ppm']*p['dt']*-1,
+        'v':np.random.normal(0, p['std_v'])*p['ppm']*p['dt'],
+        't0':1
+        }]
     exitted_frame1 = []
-    
+    exitted_frame2 = []
     # Init Morphology Operators
 
     strel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 7))
@@ -164,6 +171,13 @@ def simulator(p, sim_len=1000):
             'v':np.random.normal(0, p['std_v'])*p['ppm']*p['dt'],
             't0':t
             })
+            bubbles2.append({
+            'y':np.random.normal(p['Z2'], p['sigma_y'])*p['ppm'],
+            'x':p['FOVx']-1,
+            'u':np.random.normal(p['mu_u'],p['std_u'])*p['ppm']*p['dt']*-1,
+            'v':np.random.normal(0, p['std_v'])*p['ppm']*p['dt'],
+            't0':t
+            })
 
         for b in range(len(bubbles1)):
 
@@ -178,6 +192,21 @@ def simulator(p, sim_len=1000):
                 exitted_frame1.append(b)
 
             mask[int(np.ceil(bubbles1[b]['y'])), int(np.min([p['FOVx']-1, round(bubbles1[b]['x'])]))] = 1
+
+
+        for b in range(len(bubbles2)):
+
+            bubbles2[b]['y'] = bubbles2[b]['y'] + (t-bubbles2[b]['t0'])*bubbles2[b]['v']
+
+            bubbles2[b]['x'] = bubbles2[b]['x'] + bubbles2[b]['u']
+
+            if bubbles2[b]['y'] < p['up_lim2'] + abs(bubbles2[b]['v']) or bubbles2[b]['y'] > p['down_lim2'] - abs(bubbles2[b]['v']):
+                bubbles2[b]['u'], bubbles2[b]['v'] = elastic_collision(bubbles2[b]['u'], bubbles2[b]['v'])
+
+            if bubbles2[b]['x'] < 0 + bubbles2[b]['u']:
+                exitted_frame2.append(b)
+
+            mask[int(np.ceil(bubbles2[b]['y'])), int(np.max([0, round(bubbles2[b]['x'])]))] = 1
         
         sample_im = cv2.filter2D(mask,-1, p['psf'])
 
@@ -196,7 +225,6 @@ def simulator(p, sim_len=1000):
 
         peaks[peak_ind] = peak_vals[peak_ind]
 
-        
         flowim = 255*np.copy(peaks)
         flowim = flowim.astype(np.uint8)
 
@@ -224,7 +252,7 @@ def simulator(p, sim_len=1000):
             good_new = p1[st==1]
             good_old = p0[st==1]
 
-            u, v = calc_speed(good_new, good_old, p['dt'], p['ppm'])
+            u, v = calc_speed(good_new, good_old, FR, p['ppm'])
             print(u,v)
 
             # draw the tracks
@@ -254,6 +282,11 @@ def simulator(p, sim_len=1000):
             for b in exitted_frame1:
                 bubbles1.pop(b)
                 exitted_frame1 = []
+        
+        if len(exitted_frame2) > 0:
+            for b in exitted_frame2:
+                bubbles2.pop(b)
+                exitted_frame2 = []
 
         cv2.imshow('Simulation', display)
         c = cv2.waitKey(1)
