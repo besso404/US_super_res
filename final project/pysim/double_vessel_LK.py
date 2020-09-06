@@ -25,7 +25,7 @@ def sim_params():
     mu_u = 1040                                #[um/sec]
     std_u = 100                                #[um/sec]
     std_v = 0.5                                #[um/sec]
-    FR = 30                                    #[frames/sec]
+    FR = 100                                   #[frames/sec]
 
     # Calculated Params
 
@@ -88,7 +88,7 @@ def calc_speed(p1_, p0_, fr_, ppm_):
     return (u,v)
 
 
-def simulator(p, sim_len=1000):
+def simulator(p, sim_len=100000):
 
     # Init Background
 
@@ -119,7 +119,7 @@ def simulator(p, sim_len=1000):
     bubbles1 = [{
         'y':np.random.normal(p['Z1'], p['sigma_y'])*p['ppm'],
         'x':0,
-        'u':np.random.normal(p['mu_u'],p['std_u'])*p['ppm']*p['dt'],
+        'u':p['mu_u']*p['ppm']*p['dt'],
         'v':np.random.normal(0, p['std_v'])*p['ppm']*p['dt'],
         't0':1
         }]
@@ -127,7 +127,7 @@ def simulator(p, sim_len=1000):
     bubbles2 = [{
         'y':np.random.normal(p['Z2'], p['sigma_y'])*p['ppm'],
         'x':p['FOVx']-1,
-        'u':np.random.normal(p['mu_u'],p['std_u'])*p['ppm']*p['dt']*-1,
+        'u':-1*p['mu_u']*p['ppm']*p['dt'],
         'v':np.random.normal(0, p['std_v'])*p['ppm']*p['dt'],
         't0':1
         }]
@@ -143,8 +143,8 @@ def simulator(p, sim_len=1000):
     # Init Optical Flow
 
     # Parameters for lucas kanade optical flow
-    lk_params = dict( winSize  = (15,15),
-                    maxLevel = 2,
+    lk_params = dict( winSize  = (21,21),
+                    maxLevel = 1,
                     criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.05))
 
     # params for ShiTomasi corner detection
@@ -168,14 +168,14 @@ def simulator(p, sim_len=1000):
             bubbles1.append({
             'y':np.random.normal(p['Z1'], p['sigma_y'])*p['ppm'],
             'x':0,
-            'u':np.random.normal(p['mu_u'],p['std_u'])*p['ppm']*p['dt'],
+            'u':p['mu_u']*p['ppm']*p['dt'],
             'v':np.random.normal(0, p['std_v'])*p['ppm']*p['dt'],
             't0':t
             })
             bubbles2.append({
             'y':np.random.normal(p['Z2'], p['sigma_y'])*p['ppm'],
             'x':p['FOVx']-1,
-            'u':np.random.normal(p['mu_u'],p['std_u'])*p['ppm']*p['dt']*-1,
+            'u':-1*p['mu_u']*p['ppm']*p['dt'],
             'v':np.random.normal(0, p['std_v'])*p['ppm']*p['dt'],
             't0':t
             })
@@ -212,7 +212,7 @@ def simulator(p, sim_len=1000):
         sample_im = cv2.filter2D(mask,-1, p['psf'])
         mask = cv2.dilate(mask, bubble)
 
-        sample_im = random_noise(sample_im, mode='gaussian')
+        # sample_im = random_noise(sample_im, mode='gaussian')
 
         sample_im = (255*sample_im/sample_im.max()).astype(np.uint8)
 
@@ -226,18 +226,20 @@ def simulator(p, sim_len=1000):
 
         peaks = (255*corr/corr.max()).astype(np.uint8)
 
-        filt = (corr < 180) & (sample_im == 255)
+        filt = (corr > 180) & (sample_im > 250)
         peaks[filt] = 255 
         peaks[~filt] = 0 
         
-        peaks = median_filter(peaks, size=3)
+        # peaks = median_filter(peaks, size=3)
 
-        flowim = np.copy(peaks)
+        flowim = cv2.dilate(peaks, bubble)
+
+        found_bubbles = flowim == 255
+
+        flowim[found_bubbles] = sample_im[found_bubbles]
 
         sample_im = cv2.merge([sample_im, sample_im, sample_im])
         image = background + cv2.merge([mask, mask, mask])
-
-        flowim = cv2.dilate(flowim, bubble)
 
         # Optical Flow
 
@@ -268,7 +270,7 @@ def simulator(p, sim_len=1000):
                 flow_mask = cv2.line(flow_mask, (a,b),(c,d), color[i].tolist(), 2)
                 frame = cv2.circle(frame,(a,b),5,color[i].tolist(),-1)
             
-        flowim = cv2.add(frame//10,flow_mask)
+        flowim = cv2.add(frame//2,flow_mask)
         
         p0 = good_new.reshape(-1,1,2)
         
@@ -276,8 +278,9 @@ def simulator(p, sim_len=1000):
 
         # Edit display
 
-        flowim = flowim.astype(np.float64)/255
+        flowim = flowim.astype(np.float64)
 
+        flowim = (flowim - flowim.min())/(flowim.max() - flowim.min())
         localizations += peaks
         superes = (localizations - localizations.min())/(localizations.max() - localizations.min())
 
