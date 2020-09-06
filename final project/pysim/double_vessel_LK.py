@@ -1,9 +1,9 @@
+
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy.signal import convolve2d
-from scipy.ndimage import maximum_filter
+from scipy.ndimage import median_filter
 from skimage.util import random_noise
-from skimage.morphology import local_maxima
 import cv2
 
 def sim_params():
@@ -96,11 +96,12 @@ def simulator(p, sim_len=1000):
     true_image = np.zeros((p['FOVx'], p['FOVy']), np.float32)
     last_im = np.copy(true_image).astype(np.uint8)
 
+    localizations = np.copy(sample)
+    
     true_image[p['up_lim1']:p['down_lim1'],:] = 1
     true_image[p['up_lim2']:p['down_lim2'],:] = 1
 
     true_image = cv2.merge([true_image*0.1, true_image*0.1, true_image])
-
     image = np.zeros((p['FOVx'], p['FOVy'], 3), np.float32)
     sample_im = np.copy(image)
     background = np.copy(true_image)
@@ -134,9 +135,10 @@ def simulator(p, sim_len=1000):
     exitted_frame2 = []
     # Init Morphology Operators
 
-    strel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 7))
+    strel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    strel2 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+
     bubble = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,7))
-    border = 10
 
     # Init Optical Flow
 
@@ -160,7 +162,6 @@ def simulator(p, sim_len=1000):
     for t in range(1, sim_len):
 
         mask = np.zeros((p['FOVx'], p['FOVy']), np.float32)
-        peaks = np.zeros((p['FOVx'], p['FOVy']), np.float32)
 
         if t % FR == 0:
 
@@ -209,34 +210,39 @@ def simulator(p, sim_len=1000):
             mask[int(np.ceil(bubbles2[b]['y'])), int(np.max([0, round(bubbles2[b]['x'])]))] = 1
         
         sample_im = cv2.filter2D(mask,-1, p['psf'])
+        mask = cv2.dilate(mask, bubble)
 
         sample_im = random_noise(sample_im, mode='gaussian')
 
-        sample_im = sample_im/sample_im.max()
-        peak_vals = np.copy(sample_im)
-        peak_vals[peak_vals < 0.5] = 0
+        sample_im = (255*sample_im/sample_im.max()).astype(np.uint8)
 
-        peak_vals = cv2.copyMakeBorder(peak_vals, border, border, border, border, cv2.BORDER_CONSTANT, None, 0)
-        peak_vals = cv2.erode(peak_vals, strel)
+        input_im = cv2.copyMakeBorder(sample_im, 25, 25, 25, 25, cv2.BORDER_CONSTANT, None, 0)
 
-        peak_ind = local_maxima(peak_vals, indices=False)
-        peak_vals = peak_vals[border:-border, border:-border]
-        peak_ind = peak_ind[border:-border, border:-border]
+        input_im = (255*input_im).astype(np.uint8)
 
-        peaks[peak_ind] = peak_vals[peak_ind]
+        corr = cv2.matchTemplate(input_im, (255*p['psf']).astype(np.uint8), cv2.TM_CCOEFF)
 
-        flowim = 255*np.copy(peaks)
-        flowim = flowim.astype(np.uint8)
+        corr = corr[1:, 1:]
+
+        peaks = (255*corr/corr.max()).astype(np.uint8)
+
+        filt = (corr < 180) & (sample_im == 255)
+        peaks[filt] = 255 
+        peaks[~filt] = 0 
+        
+        peaks = median_filter(peaks, size=3)
+
+        flowim = np.copy(peaks)
 
         sample_im = cv2.merge([sample_im, sample_im, sample_im])
-        peaks = cv2.merge([peaks, peaks, peaks])
-        image = background + sample_im
+        image = background + cv2.merge([mask, mask, mask])
 
         flowim = cv2.dilate(flowim, bubble)
 
         # Optical Flow
 
         frame_gray = np.copy(flowim)
+        peaks = cv2.merge([peaks, peaks, peaks])
         frame = cv2.merge([frame_gray, frame_gray, frame_gray])
         flow_mask = np.zeros_like(peaks).astype(np.uint8)
 
@@ -263,8 +269,7 @@ def simulator(p, sim_len=1000):
                 frame = cv2.circle(frame,(a,b),5,color[i].tolist(),-1)
             
         flowim = cv2.add(frame//10,flow_mask)
-
-
+        
         p0 = good_new.reshape(-1,1,2)
         
         last_im = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -273,9 +278,15 @@ def simulator(p, sim_len=1000):
 
         flowim = flowim.astype(np.float64)/255
 
+        localizations += peaks
+        superes = (localizations - localizations.min())/(localizations.max() - localizations.min())
+
+        sample_im = (sample_im.astype(np.float32))/sample_im.max()
+        input_im = (input_im.astype(np.float32))/input_im.max()
+
         display[0:p['FOVx'], 0:p['FOVy'], :] = image
-        display[0:p['FOVx']:, p['FOVy']:, :] = sample_im
-        display[p['FOVx']:, :p['FOVy'], :] += peaks
+        display[0:p['FOVx']:, p['FOVy']:, :] = sample_im/sample_im.max()
+        display[p['FOVx']:, :p['FOVy'], :] = superes
         display[p['FOVx']:, p['FOVy']:, :] = flowim
 
         if len(exitted_frame1) > 0:
