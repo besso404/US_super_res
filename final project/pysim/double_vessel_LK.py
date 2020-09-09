@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 from scipy.signal import convolve2d
 from scipy.ndimage import median_filter
 from skimage.util import random_noise
+from skimage.feature import peak_local_max
 import cv2
 
 def sim_params():
@@ -133,22 +134,20 @@ def simulator(p, sim_len=100000):
         }]
     exitted_frame1 = []
     exitted_frame2 = []
-    # Init Morphology Operators
 
-    strel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-    strel2 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    # Init Morphology Operators
 
     bubble = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,7))
 
     # Init Optical Flow
 
     # Parameters for lucas kanade optical flow
-    lk_params = dict( winSize  = (21,21),
+    lk_params = dict( winSize  = (15,15),
                     maxLevel = 1,
                     criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.05))
 
     # params for ShiTomasi corner detection
-    feature_params = dict( maxCorners = 100,
+    feature_params = dict( maxCorners = 10,
                             qualityLevel = 0.3,
                             minDistance = 7,
                             blockSize = 7 )
@@ -159,6 +158,7 @@ def simulator(p, sim_len=100000):
     # Start simulation
 
     FR = 1/p['dt']
+
     for t in range(1, sim_len):
 
         mask = np.zeros((p['FOVx'], p['FOVy']), np.float32)
@@ -212,44 +212,31 @@ def simulator(p, sim_len=100000):
         sample_im = cv2.filter2D(mask,-1, p['psf'])
         mask = cv2.dilate(mask, bubble)
 
-        # sample_im = random_noise(sample_im, mode='gaussian')
+        sample_im = random_noise(sample_im, mode='gaussian')
 
         sample_im = (255*sample_im/sample_im.max()).astype(np.uint8)
 
-        input_im = cv2.copyMakeBorder(sample_im, 25, 25, 25, 25, cv2.BORDER_CONSTANT, None, 0)
+        peak_ind = peak_local_max(sample_im, min_distance=15, indices=False, exclude_border=50)
 
-        input_im = (255*input_im).astype(np.uint8)
+        peaks = np.zeros_like(sample_im)
 
-        corr = cv2.matchTemplate(input_im, (255*p['psf']).astype(np.uint8), cv2.TM_CCOEFF)
+        peaks[peak_ind] = sample_im[peak_ind]
 
-        corr = corr[1:, 1:]
-
-        peaks = (255*corr/corr.max()).astype(np.uint8)
-
-        filt = (corr > 180) & (sample_im > 250)
-        peaks[filt] = 255 
-        peaks[~filt] = 0 
-        
         # peaks = median_filter(peaks, size=3)
-
-        flowim = cv2.dilate(peaks, bubble)
-
-        found_bubbles = flowim == 255
-
-        flowim[found_bubbles] = sample_im[found_bubbles]
-
-        sample_im = cv2.merge([sample_im, sample_im, sample_im])
-        image = background + cv2.merge([mask, mask, mask])
 
         # Optical Flow
 
-        frame_gray = np.copy(flowim)
+        frame_gray = np.copy(peaks)
+        
         peaks = cv2.merge([peaks, peaks, peaks])
+
+        flowim = np.copy(peaks)
+
         frame = cv2.merge([frame_gray, frame_gray, frame_gray])
         flow_mask = np.zeros_like(peaks).astype(np.uint8)
 
         
-        if t % 10 == 0 or t == 1:
+        if t % 30 == 0 or t == 1:
             p0 = cv2.goodFeaturesToTrack(frame_gray, mask = None, **feature_params)
         
         p1, st, err = cv2.calcOpticalFlowPyrLK(last_im, frame_gray, p0, None, **lk_params)
@@ -281,11 +268,14 @@ def simulator(p, sim_len=100000):
         flowim = flowim.astype(np.float64)
 
         flowim = (flowim - flowim.min())/(flowim.max() - flowim.min())
+
         localizations += peaks
         superes = (localizations - localizations.min())/(localizations.max() - localizations.min())
 
         sample_im = (sample_im.astype(np.float32))/sample_im.max()
-        input_im = (input_im.astype(np.float32))/input_im.max()
+        
+        sample_im = cv2.merge([sample_im, sample_im, sample_im])
+        image = background + cv2.merge([mask, mask, mask])
 
         display[0:p['FOVx'], 0:p['FOVy'], :] = image
         display[0:p['FOVx']:, p['FOVy']:, :] = sample_im/sample_im.max()
