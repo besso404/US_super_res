@@ -9,4 +9,6 @@
 
 - [x] Crossed Vessels
 - [x] Adjoining Vessels
-- [ ] Move to Python
+- [x] Move to Python
+- [ ] Select preferred OF method
+- [ ] Implement on real data
