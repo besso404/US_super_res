@@ -79,23 +79,15 @@ def elastic_collision(u0, v0):
 
     return u1, v1
 
-def reliable_meas(X, pixels_per_umsec):
+def calc_speed(p1_, p0_, fr_, ppm_):
 
-    if len(X) < 2:
-        return (0,0)
-
-    variance_power = np.sum(np.var(X, axis=0), axis=1)
-
-    mu_X = np.mean(X, axis=0)
-
-    U = mu_X[:,0][variance_power < 3]
-    V = mu_X[:,1][variance_power < 3]
-
+    dp = p1_ - p0_
     
-    if len(U) < 2:
-        return (0,0)
+    u = np.mean(dp[:,0])*fr_/ppm_
+    v = np.mean(dp[:,1])*fr_/ppm_
 
-    return (np.mean(U)*pixels_per_umsec, np.mean(V)*pixels_per_umsec)
+    return (u,v)
+
 
 def simulator(p, sim_len=100000):
 
@@ -103,7 +95,7 @@ def simulator(p, sim_len=100000):
 
     sample = np.zeros((p['FOVx'], p['FOVy'], 3), np.float32)
     true_image = np.zeros((p['FOVx'], p['FOVy']), np.float32)
-    last_im = np.copy(true_image).astype(np.uint8)
+    last_im = np.copy(true_image)
 
     localizations = np.copy(sample)
     
@@ -148,30 +140,13 @@ def simulator(p, sim_len=100000):
 
     bubble = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,7))
 
-    # Init Optical Flow
-    dP = []
-
-    # Parameters for lucas kanade optical flow
-    lk_params = dict( winSize  = (15,15),
-                    maxLevel = 1,
-                    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.05))
-
-    # params for ShiTomasi corner detection
-    feature_params = dict( maxCorners = 100,
-                            qualityLevel = 0.3,
-                            minDistance = 7,
-                            blockSize = 7 )
-
-    # Create some random colors
-    color = np.random.randint(0,255,(500,3))
-
     # Init Text
 
     font = cv2.FONT_ITALIC
     u_bottom_left_corner_of_text = (550,750)
     v_bottom_left_corner_of_text = (550,800)
     font_scale = 0.5
-    font_color = (0.6,0.6,0.6)
+    font_color = (0.3,0.3,0.3)
     line_type = 2
 
     # Start simulation
@@ -191,7 +166,6 @@ def simulator(p, sim_len=100000):
             'v':np.random.normal(0, p['std_v'])*p['ppm']*p['dt'],
             't0':t
             })
-
             bubbles2.append({
             'y':np.random.normal(p['Z2'], p['sigma_y'])*p['ppm'],
             'x':p['FOVx']-1,
@@ -242,74 +216,65 @@ def simulator(p, sim_len=100000):
 
         peaks[peak_ind] = sample_im[peak_ind]
 
-        # peaks = median_filter(peaks, size=3)
+        peaks = median_filter(peaks, size=3)
 
         # Optical Flow
 
-        frame_gray = np.copy(peaks)
-        
-        peaks = cv2.merge([peaks, peaks, peaks])
+        # Farneback Method
+        flow = cv2.calcOpticalFlowFarneback(last_im,
+                                            peaks, 
+                                            None, 
+                                            pyr_scale=0.5, 
+                                            levels=3, 
+                                            winsize=7, 
+                                            iterations=3, 
+                                            poly_n=5, 
+                                            poly_sigma=1.2, 
+                                            flags=0)
 
-        flowim = np.copy(peaks)
+        last_im = np.copy(peaks)
+        dx = flow[...,0]
+        dy = flow[...,1]
 
-        frame = cv2.merge([frame_gray, frame_gray, frame_gray])
-        flow_mask = np.zeros_like(peaks).astype(np.uint8)
+        # X' = dP / dt
+        u = dx * FR
+        v = dy * FR
 
-        
-        if t % 30 == 0 or t == 1:
-            p0 = cv2.goodFeaturesToTrack(frame_gray, mask = None, **feature_params)
-            u, v = reliable_meas(dP, FR/p['ppm'])
+        flow = u**2 + v**2
 
-            dP = []
-        
-        p1, st, err = cv2.calcOpticalFlowPyrLK(last_im, frame_gray, p0, None, **lk_params)
+        U = u[u != 0]
+        if len(U):
+            U = np.mean(U)/p['ppm'] 
+            U_str = "U : %3f, [um/sec]" % (U)
+        else:
+            U_str = "U : 0 [um/sec]"
 
-        if p1 is not None:
+        V = v[v != 0]
+        if len(V):
+            V = np.mean(V)/p['ppm'] 
+            V_str = "V : %3f, [um/sec]" % (V)
+        else:
+            V_str = "V : 0 [um/sec]"
 
-            # Select good points
-            good_new = p1[st==1]
-            good_old = p0[st==1]
-            
-            if (good_new.shape == good_old.shape):
-                dP.append(good_new-good_old)
+        if flow.max() > 0:
+            flow = flow/flow.max()
 
-            # draw the tracks
-            for i,(new,old) in enumerate(zip(good_new, good_old)):
-                a,b = new.ravel()
-                c,d = old.ravel()
-                flow_mask = cv2.line(flow_mask, (a,b),(c,d), color[i].tolist(), 2)
-                frame = cv2.circle(frame,(a,b),5,color[i].tolist(),-1)
-            
-        flowim = cv2.add(frame//2,flow_mask)
-        
-        p0 = good_new.reshape(-1,1,2)
-        
-        last_im = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        # Edit display
-
-        flowim = flowim.astype(np.float64)
-
-        flowim = (flowim - flowim.min())/(flowim.max() - flowim.min())
-
-        localizations += peaks
-        superes = (localizations - localizations.min())/(localizations.max() - localizations.min())
-
+        flow = cv2.merge([flow, flow, flow])
         sample_im = (sample_im.astype(np.float32))/sample_im.max()
         
+        peaks = cv2.merge([peaks, peaks, peaks])
         sample_im = cv2.merge([sample_im, sample_im, sample_im])
         image = background + cv2.merge([mask, mask, mask])
+        localizations += peaks
+        superes = (localizations - localizations.min())/(localizations.max() - localizations.min())
 
         display[0:p['FOVx'], 0:p['FOVy'], :] = image
         display[0:p['FOVx']:, p['FOVy']:, :] = sample_im/sample_im.max()
         display[p['FOVx']:, :p['FOVy'], :] = superes
-        display[p['FOVx']:, p['FOVy']:, :] = flowim
-
-        u_str = "U : %3f, [um/sec]" % (u)
-        v_str = "V : %3f, [um/sec]" % (v)
+        display[p['FOVx']:, p['FOVy']:, :] = flow
 
         cv2.putText(display,
-                    u_str,
+                    U_str,
                     u_bottom_left_corner_of_text,
                     font,
                     font_scale,
@@ -318,7 +283,7 @@ def simulator(p, sim_len=100000):
 
         
         cv2.putText(display,
-                    v_str,
+                    V_str,
                     v_bottom_left_corner_of_text,
                     font,
                     font_scale,
