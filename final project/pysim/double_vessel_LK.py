@@ -229,20 +229,20 @@ def simulator(p, sim_len=100000):
 
             mask[int(np.ceil(bubbles2[b]['y'])), int(np.max([0, round(bubbles2[b]['x'])]))] = 1
         
-        sample_im = cv2.filter2D(mask,-1, p['psf'])
+        sample_im = cv2.filter2D(mask,-1, p['psf'], borderType = cv2.BORDER_CONSTANT)
         mask = cv2.dilate(mask, bubble)
 
         sample_im = random_noise(sample_im, mode='gaussian')
 
         sample_im = (255*sample_im/sample_im.max()).astype(np.uint8)
 
-        peak_ind = peak_local_max(sample_im, min_distance=15, indices=False, exclude_border=50)
+        peak_ind = peak_local_max(sample_im, min_distance=15, indices=False, exclude_border=False)
 
         peaks = np.zeros_like(sample_im)
 
         peaks[peak_ind] = sample_im[peak_ind]
 
-        # peaks = median_filter(peaks, size=3)
+        peaks = median_filter(peaks, size=3)
 
         # Optical Flow
 
