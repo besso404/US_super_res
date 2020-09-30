@@ -1,27 +1,27 @@
-
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy.signal import convolve2d
-from scipy.ndimage import median_filter
+from scipy.ndimage.measurements import center_of_mass
 from skimage.util import random_noise
-from skimage.feature import peak_local_max
+from skimage.measure import label, regionprops
 import cv2
 
 def sim_params():
 
     # Simulation Params
+    sim_len = 1000                             #[frames]
+    phase1_len = 500                           #[frames]
     FOVx = 5000                                #[um]
     FOVy = 5000                                #[um]
     W = 2500                                   #[um]
     D = 15                                     #[um]                  
     F = 10                                     #[MHz]
     Z1 = 1000                                  #[um]
-    Z2 = 1090                                  #[um]
+    Z2 = 1100                                  #[um]
     Z0 = 7500                                  #[um]
     Csound = 1540*1e6                          #[um/sec]
     psf_resolution = 50                        #[pixels?]
     Ncycles = 1
-    sim_len = 3000
     ppm = 0.1                                  #[pixel/um]
     mu_u = 1040                                #[um/sec]
     std_u = 100                                #[um/sec]
@@ -49,6 +49,8 @@ def sim_params():
     psf = convolve2d(psf_ax.T,psf_lat)
 
     return {
+        "sim_len":sim_len,         #[frames]
+        "phase1_len":phase1_len,   #[frames]
         "FOVx":FOVx_,              #[pixel]
         "FOVy":FOVy_,              #[pixel]
         "ppm":ppm,                 #[pixel/um]
@@ -79,24 +81,46 @@ def elastic_collision(u0, v0):
 
     return u1, v1
 
-def calc_speed(p1_, p0_, fr_, ppm_):
+def find_peaks2d(filtered_im, sampled_im):
 
-    dp = p1_ - p0_
-    
-    u = np.mean(dp[:,0])*fr_/ppm_
-    v = np.mean(dp[:,1])*fr_/ppm_
+    # Phase 1 - Isolate all peaks
+    peaks = np.zeros_like(filtered_im)
 
-    return (u,v)
+    im_erode = cv2.erode(filtered_im, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5)))
 
+    labels = label(im_erode>0)
 
-def simulator(p, sim_len=100000):
+    props = regionprops(labels, intensity_image=sampled_im)
+
+    for obj in props:
+        mask = (sampled_im == obj.max_intensity) * (labels == obj.label)
+        peaks[mask] = sampled_im[mask]
+
+    # Fill holes
+    peaks = cv2.dilate(peaks, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,2)))
+
+    # Phase 2 - Get CoM for each peak
+    output = np.zeros_like(filtered_im)
+    labels = label(peaks)
+
+    coms = center_of_mass(peaks, labels, range(1,labels.max()))
+
+    for c in coms:
+
+        cy = int(c[0])
+        cx = int(c[1])
+
+        output[cy, cx] = 255
+         
+    return output
+
+def simulator(p):
 
     # Init Background
 
     sample = np.zeros((p['FOVx'], p['FOVy'], 3), np.float32)
     true_image = np.zeros((p['FOVx'], p['FOVy']), np.float32)
-    last_im = np.copy(true_image)
-
+    last_im = np.copy(true_image).astype(np.uint8)
     localizations = np.copy(sample)
     
     true_image[p['up_lim1']:p['down_lim1'],:] = 1
@@ -111,9 +135,6 @@ def simulator(p, sim_len=100000):
     displaybottom = np.hstack([image, sample])
 
     display = np.vstack([displaytop, displaybottom])
-
-    cv2.imshow('Simulation', display)
-    cv2.waitKey(1)
 
     # Bubbles
 
@@ -136,28 +157,50 @@ def simulator(p, sim_len=100000):
     exitted_frame1 = []
     exitted_frame2 = []
 
-    # Init Morphology Operators
-
-    bubble = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,7))
+    # Init Optical Flow
+    u,v = (0,0)
+    rec_U = []
+    rec_V = []
 
     # Init Text
 
     font = cv2.FONT_ITALIC
-    u_bottom_left_corner_of_text = (550,750)
-    v_bottom_left_corner_of_text = (550,800)
+    t_bottom_left_corner_of_text = (250,200)
+    u_bottom_left_corner_of_text = (250,250)
+    v_bottom_left_corner_of_text = (250,300)
     font_scale = 0.5
-    font_color = (0.3,0.3,0.3)
+    font_color = (0.6,0.6,0.6)
     line_type = 2
+    u_str = "Creating Vessels Mask.."
+    v_str = ""
 
-    # Start simulation
+    # Init Morphology Operators
+
+    bubble = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,7))
+    cleaner = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
 
     FR = 1/p['dt']
+    lastmax = 1
 
-    for t in range(1, sim_len):
+    for t in range(1, p['sim_len']):
+
+        cv2.imshow('Simulation', display)
+        c = cv2.waitKey(1)
+
+        if c == 27:
+            break
+        elif c == 32:
+            print('breakpoint')
 
         mask = np.zeros((p['FOVx'], p['FOVy']), np.float32)
 
         if t % FR == 0:
+
+            thismax = localizations.max()
+
+            localizations = (localizations + localizations * lastmax/thismax)/(thismax + lastmax) 
+
+            lastmax = thismax
 
             bubbles1.append({
             'y':np.random.normal(p['Z1'], p['sigma_y'])*p['ppm'],
@@ -166,6 +209,7 @@ def simulator(p, sim_len=100000):
             'v':np.random.normal(0, p['std_v'])*p['ppm']*p['dt'],
             't0':t
             })
+
             bubbles2.append({
             'y':np.random.normal(p['Z2'], p['sigma_y'])*p['ppm'],
             'x':p['FOVx']-1,
@@ -203,78 +247,95 @@ def simulator(p, sim_len=100000):
 
             mask[int(np.ceil(bubbles2[b]['y'])), int(np.max([0, round(bubbles2[b]['x'])]))] = 1
         
-        sample_im = cv2.filter2D(mask,-1, p['psf'],borderType = cv2.BORDER_CONSTANT)
+        sample_im = cv2.filter2D(mask,-1, p['psf'],borderType=cv2.BORDER_CONSTANT)
         mask = cv2.dilate(mask, bubble)
 
         sample_im = random_noise(sample_im, mode='gaussian')
 
         sample_im = (255*sample_im/sample_im.max()).astype(np.uint8)
 
-        peak_ind = peak_local_max(sample_im, min_distance=15, indices=False, exclude_border=False)
+        filtered = cv2.fastNlMeansDenoising(sample_im, templateWindowSize=11, searchWindowSize=15, h=100.0)
 
-        peaks = np.zeros_like(sample_im)
+        filtered = cv2.erode(filtered, cleaner)
+        filtered[filtered<150] = 0
+        filtered[filtered>0] = sample_im[filtered>0]
 
-        peaks[peak_ind] = sample_im[peak_ind]
+        peaks = find_peaks2d(filtered, sample_im)
+        peaks = cv2.merge([peaks, peaks, peaks])
+        
+        if t == p['phase1_len']:
 
-        peaks = median_filter(peaks, size=3)
+            vessels = localizations[:,:,0]>0
+            last_im = np.copy(filtered) * vessels
 
         # Optical Flow
 
-        # Farneback Method
-        flow = cv2.calcOpticalFlowFarneback(last_im,
-                                            peaks, 
-                                            None, 
-                                            pyr_scale=0.5, 
-                                            levels=3, 
-                                            winsize=7, 
-                                            iterations=3, 
-                                            poly_n=5, 
-                                            poly_sigma=1.2, 
-                                            flags=0)
+        if t > p['phase1_len']:
 
-        last_im = np.copy(peaks)
-        dx = flow[...,0]
-        dy = flow[...,1]
+            frame_gray = np.copy(filtered) * vessels
+        
+            # Farneback Method
+            flow = cv2.calcOpticalFlowFarneback(last_im,
+                                                frame_gray, 
+                                                None, 
+                                                pyr_scale=0.5, 
+                                                levels=3, 
+                                                winsize=7, 
+                                                iterations=3, 
+                                                poly_n=5, 
+                                                poly_sigma=1.2, 
+                                                flags=0)
 
-        # X' = dP / dt
-        u = dx * FR
-        v = dy * FR
+            dx = flow[...,0]
+            dy = flow[...,1]
 
-        flow = u**2 + v**2
+            # X' = dP / dt
+            u = dx * FR
+            v = dy * FR
 
-        U = u[u != 0]
-        if len(U):
-            U = np.mean(U)/p['ppm'] 
-            U_str = "U : %3f, [um/sec]" % (U)
-        else:
-            U_str = "U : 0 [um/sec]"
+            U = np.abs(u[u != 0])
+            if len(U):
+                U = np.mean(U)/p['ppm'] 
+                rec_U.append(U)
+                u_str = "U : %3f, [um/sec]" % (U)
+            else:
+                u_str = "U : 0 [um/sec]"
 
-        V = v[v != 0]
-        if len(V):
-            V = np.mean(V)/p['ppm'] 
-            V_str = "V : %3f, [um/sec]" % (V)
-        else:
-            V_str = "V : 0 [um/sec]"
+            V = v[v != 0]
+            if len(V):
+                V = np.mean(V)/p['ppm'] 
+                rec_V.append(V)
+                v_str = "V : %3f, [um/sec]" % (V)
+            else:
+                v_str = "V : 0 [um/sec]"
 
-        if flow.max() > 0:
-            flow = flow/flow.max()
+            flow = cv2.merge([np.float32(filtered)/filtered.max(), u/u.max(), v/v.max()])
+            display[p['FOVx']:, p['FOVy']:, :] = flow
 
-        flow = cv2.merge([flow, flow, flow])
+            last_im = np.copy(frame_gray)
+
         sample_im = (sample_im.astype(np.float32))/sample_im.max()
         
-        peaks = cv2.merge([peaks, peaks, peaks])
         sample_im = cv2.merge([sample_im, sample_im, sample_im])
         image = background + cv2.merge([mask, mask, mask])
         localizations += peaks
-        superes = (localizations - localizations.min())/(localizations.max() - localizations.min())
 
         display[0:p['FOVx'], 0:p['FOVy'], :] = image
         display[0:p['FOVx']:, p['FOVy']:, :] = sample_im/sample_im.max()
-        display[p['FOVx']:, :p['FOVy'], :] = superes
-        display[p['FOVx']:, p['FOVy']:, :] = flow
+        display[p['FOVx']:, :p['FOVy'], :] = localizations
+
+        t_str = "Simulation Step: " + str(t)
 
         cv2.putText(display,
-                    U_str,
+                    t_str,
+                    t_bottom_left_corner_of_text,
+                    font,
+                    font_scale,
+                    font_color,
+                    line_type)
+
+        cv2.putText(display,
+                    u_str,
                     u_bottom_left_corner_of_text,
                     font,
                     font_scale,
@@ -283,7 +344,7 @@ def simulator(p, sim_len=100000):
 
         
         cv2.putText(display,
-                    V_str,
+                    v_str,
                     v_bottom_left_corner_of_text,
                     font,
                     font_scale,
@@ -300,11 +361,17 @@ def simulator(p, sim_len=100000):
                 bubbles2.pop(b)
                 exitted_frame2 = []
 
-        cv2.imshow('Simulation', display)
-        c = cv2.waitKey(1)
-
-        if c == 27:
-            break
+    plt.subplot(121)
+    plt.hist(rec_U)
+    plt.title('Recorded U Velocity')
+    plt.xlabel('Velocity [um/sec]')
+    plt.ylabel('No. Occurences')
+    plt.subplot(122)
+    plt.hist(rec_V)
+    plt.title('Recorded V Velocity')
+    plt.xlabel('Velocity [um/sec]')
+    plt.show()
+    print('end')
         
         
 
