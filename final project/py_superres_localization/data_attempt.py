@@ -1,14 +1,15 @@
+
 from scipy.io import loadmat
 import cv2
 import numpy as np
-from scipy.ndimage.measurements import center_of_mass
 from skimage.measure import label, regionprops
+from scipy.signal import medfilt2d
 
 def get_data():
 
     first = True
 
-    for i in range (5, 9):
+    for i in range (5, 21):
 
         path = './super_frames/SuperFrameCPS' + str(i) + '.mat'
 
@@ -25,9 +26,11 @@ def get_data():
 def find_peaks2d(filtered_im, sampled_im):
 
     # Phase 1 - Isolate all peaks
-    peaks = np.zeros_like(filtered_im)
+    peaks = np.zeros_like(sampled_im)
 
-    labels = label(filtered_im>0)
+    im_erode = cv2.erode(filtered_im, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3)))
+
+    labels = label(im_erode>0)
 
     props = regionprops(labels, intensity_image=sampled_im)
 
@@ -35,28 +38,44 @@ def find_peaks2d(filtered_im, sampled_im):
         mask = (sampled_im == obj.max_intensity) * (labels == obj.label)
         peaks[mask] = sampled_im[mask]
 
-    # Fill holes
-    peaks = cv2.dilate(peaks, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,2)))
+    # Kill gaps -> Fill holes
+    peaks = medfilt2d(peaks, (1,3))
+    peaks = cv2.dilate(peaks, cv2.getStructuringElement(cv2.MORPH_RECT, (3,1)))
 
-    # Phase 2 - Get CoM for each peak
-    output = np.zeros_like(filtered_im)
+    # Phase 2 - Use estimated CoM as base for peak-climbing
+    peaks2 = np.zeros((filtered_im.shape[0]+2, filtered_im.shape[1]+2), np.uint8)
     labels = label(peaks)
+    props2 = regionprops(labels, intensity_image=sampled_im)
 
-    coms = center_of_mass(peaks, labels, range(1,labels.max()))
+    for obj2 in props2:
 
-    for c in coms:
+        c = obj2.weighted_centroid
 
         cy = int(c[0])
         cx = int(c[1])
 
+        
+        l, inp, peaks2, bb = cv2.floodFill(np.float32(filtered_im), peaks2, (cx,cy), newVal=255, loDiff=0, upDiff=30, flags=cv2.FLOODFILL_MASK_ONLY)
+        
+    peaks2 = peaks2[1:-1, 1:-1]
+
+    # Phase 3 - Get actual CoM    
+    output = np.zeros_like(filtered_im, dtype=np.float64)
+    labels = label(peaks2)
+    props3 = regionprops(labels, intensity_image=sampled_im)
+
+    for obj3 in props3:
+
+        c = obj3.weighted_centroid
+
+        cy = int(c[0])
+        cx = int(c[1])
         output[cy, cx] = 255
-         
+
     return output
 
-def depth_brightener(frame, factor=2):
+def depth_brightener(w, h, factor=2):
 
-    h = frame.shape[0]
-    w = frame.shape[1]
     scale = np.arange(factor, 0, -factor/h)
 
     gradient_ = np.array([scale for col in range(w)])
@@ -64,13 +83,18 @@ def depth_brightener(frame, factor=2):
 
 def localization(data):
 
-    im_sum = np.zeros_like(data[:,:,0])
+    w = data.shape[1]
+    h = data.shape[0]
+
+    im_sum = np.zeros((h*3,w*3))
     peak_sums = np.zeros_like(im_sum)
-    gradient = depth_brightener(peak_sums)
+    gradient = depth_brightener(w,h, factor=3)
 
     no_frames = data.shape[-1]
 
     lastmax = 1
+
+    
 
     for i in range(no_frames):
 
@@ -86,12 +110,13 @@ def localization(data):
 
         sample_im = sample_im + sample_im * gradient
 
+        sample_im = cv2.resize(sample_im, (w*3, h*3))
+
         sample_im = np.uint8(255*(sample_im/sample_im.max()))
 
-        filtered = cv2.fastNlMeansDenoising(sample_im, templateWindowSize=15, searchWindowSize=17, h=7.0)
+        filtered = cv2.fastNlMeansDenoising(sample_im, templateWindowSize=3, searchWindowSize=19, h=7.0)
 
-        filtered[filtered<50] = 0
-        filtered[filtered>0] = sample_im[filtered>0]
+        filtered[filtered<30] = 0
 
         peaks = find_peaks2d(filtered, sample_im)
 
@@ -99,16 +124,14 @@ def localization(data):
         peak_sums += peaks
 
         cv2.imshow('sum over time', im_sum)
-        cv2.waitKey(50)
+        cv2.waitKey(10)
 
     peak_sums = peak_sums**0.3
 
-    w = peak_sums.shape[1]
-    h = peak_sums.shape[0]
-
-    peak_sums = cv2.resize(peak_sums, (w*3,h*3))
     cv2.imshow('final sum', peak_sums/peak_sums.max())
     cv2.waitKey(0)
+
+    print('done')
 
 if __name__ == "__main__":
     dataset = get_data()
