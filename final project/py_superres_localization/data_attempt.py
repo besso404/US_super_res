@@ -9,7 +9,7 @@ def get_data():
 
     first = True
 
-    for i in range (5, 21):
+    for i in range (5, 6):
 
         path = './super_frames/SuperFrameCPS' + str(i) + '.mat'
 
@@ -72,6 +72,9 @@ def find_peaks2d(filtered_im, sampled_im):
         cx = int(c[1])
         output[cy, cx] = 255
 
+    # Phase 4 - Get easy peaks from original image
+    output[filtered_im==255] = 255
+
     return output
 
 def depth_brightener(w, h, factor=2):
@@ -86,25 +89,13 @@ def localization(data):
     w = data.shape[1]
     h = data.shape[0]
 
-    im_sum = np.zeros((h*3,w*3))
-    peak_sums = np.zeros_like(im_sum)
+    peak_sums = np.zeros((3*h,3*w))
     gradient = depth_brightener(w,h, factor=3)
 
     no_frames = data.shape[-1]
-
-    lastmax = 1
-
     
 
     for i in range(no_frames):
-
-        if i % 30 == 0 and i > 0:
-
-            thismax = im_sum.max()
-
-            im_sum = (im_sum + im_sum * lastmax/thismax)/(thismax + lastmax) 
-
-            lastmax = thismax
 
         sample_im = data[:,:,i]
 
@@ -120,11 +111,16 @@ def localization(data):
 
         peaks = find_peaks2d(filtered, sample_im)
 
-        im_sum += peaks
+        peak_show = cv2.dilate(peaks, cv2.getStructuringElement(cv2.MORPH_CROSS, (5,5)))
+
+        sample_im[peak_show>0] = 0
+
+        display = cv2.merge([sample_im, sample_im, np.uint8(peak_show)+sample_im])
+
         peak_sums += peaks
 
-        cv2.imshow('sum over time', im_sum)
-        cv2.waitKey(10)
+        cv2.imshow('frame analysis', display)
+        cv2.waitKey(75)
 
     peak_sums = peak_sums**0.3
 
