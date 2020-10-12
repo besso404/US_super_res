@@ -1,4 +1,4 @@
-
+from matplotlib import pyplot as plt
 from scipy.io import loadmat
 import cv2
 import numpy as np
@@ -9,7 +9,7 @@ def get_data():
 
     first = True
 
-    for i in range (5, 6):
+    for i in range (5, 20):
 
         path = './super_frames/SuperFrameCPS' + str(i) + '.mat'
 
@@ -39,7 +39,6 @@ def find_peaks2d(filtered_im, sampled_im):
         peaks[mask] = sampled_im[mask]
 
     # Kill gaps -> Fill holes
-    peaks = medfilt2d(peaks, (1,3))
     peaks = cv2.dilate(peaks, cv2.getStructuringElement(cv2.MORPH_RECT, (3,1)))
 
     # Phase 2 - Use estimated CoM as base for peak-climbing
@@ -72,12 +71,9 @@ def find_peaks2d(filtered_im, sampled_im):
         cx = int(c[1])
         output[cy, cx] = 255
 
-    # Phase 4 - Get easy peaks from original image
-    output[filtered_im==255] = 255
-
     return output
 
-def depth_brightener(w, h, factor=2):
+def tgc_map(h, w, factor=2):
 
     scale = np.arange(factor, 0, -factor/h)
 
@@ -86,48 +82,70 @@ def depth_brightener(w, h, factor=2):
 
 def localization(data):
 
+    # Init Rescale and TGC
     w = data.shape[1]
     h = data.shape[0]
 
     peak_sums = np.zeros((3*h,3*w))
-    gradient = depth_brightener(w,h, factor=3)
+    gradient = tgc_map(h, w, factor=3)
 
+    # Init display text
     no_frames = data.shape[-1]
     
+    # Write some Text
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    bottomLeftCornerOfText = (15, 3*h-15)
+    fontScale = 0.5
+    fontColor = (200,200,200)
+    lineType = 2
 
     for i in range(no_frames):
 
         sample_im = data[:,:,i]
-
         sample_im = sample_im + sample_im * gradient
-
-        sample_im = cv2.resize(sample_im, (w*3, h*3))
-
         sample_im = np.uint8(255*(sample_im/sample_im.max()))
-
+        
+        sample_im = cv2.resize(sample_im, (w*3, h*3), interpolation=cv2.INTER_CUBIC)
+        
         filtered = cv2.fastNlMeansDenoising(sample_im, templateWindowSize=3, searchWindowSize=19, h=7.0)
-
         filtered[filtered<30] = 0
 
         peaks = find_peaks2d(filtered, sample_im)
 
         peak_show = cv2.dilate(peaks, cv2.getStructuringElement(cv2.MORPH_CROSS, (5,5)))
-
         sample_im[peak_show>0] = 0
 
         display = cv2.merge([sample_im, sample_im, np.uint8(peak_show)+sample_im])
 
         peak_sums += peaks
 
+        text_str = 'Processed Frame %d/%d'%(i, no_frames)
+        cv2.putText(display,text_str, bottomLeftCornerOfText, font, fontScale, fontColor, lineType)
+
         cv2.imshow('frame analysis', display)
         cv2.waitKey(75)
 
-    peak_sums = peak_sums**0.3
-
-    cv2.imshow('final sum', peak_sums/peak_sums.max())
-    cv2.waitKey(0)
+    a = apply_contrast(peak_sums, relative_thresh=0.35)
+    plt.imshow(a, cmap='hot')
+    plt.show()
 
     print('done')
+
+def apply_contrast(im, gamma=0.2, relative_thresh=0.3):
+
+    output = np.copy(im**gamma)
+    output[output<output.max()*relative_thresh] = 0
+
+    non_zero = output[output>0]
+
+    output = 255 * (output - non_zero.min())/(non_zero.max()-non_zero.min())
+    output[output<0] = 0
+
+    return output
+
+
+
 
 if __name__ == "__main__":
     dataset = get_data()
