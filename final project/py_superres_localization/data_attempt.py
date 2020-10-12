@@ -126,9 +126,34 @@ def localization(data):
         cv2.imshow('frame analysis', display)
         cv2.waitKey(75)
 
-    a = apply_contrast(peak_sums, relative_thresh=0.35)
-    plt.imshow(a, cmap='hot')
+    a = apply_contrast(peak_sums, gamma=0.1, relative_thresh=0.7)
+
+    # Filter Rescaling Noise
+    fft = np.fft.fftshift(np.fft.fft2(a**0.2))
+
+    yaxis = (w*3)//2
+
+    fft[:100, yaxis-5:yaxis+5] = 0
+    fft[-100:, yaxis-5:yaxis+5] = 0
+
+    recon_signal = np.abs(np.fft.ifft2(np.fft.ifftshift(fft)))
+
+    b = apply_contrast(recon_signal, gamma=0.4, relative_thresh=0.6)
+
+    final = b**0.3
+
+    plt.imshow(final, cmap='hot')
     plt.show()
+
+    output_sums = cv2.merge([peak_sums,peak_sums,peak_sums])
+    output_a = cv2.merge([a,a,a])
+    output_b = cv2.merge([b,b,b])
+    output_final = cv2.merge([final,final,final])
+
+    cv2.imwrite('./output_sums.png', output_sums)
+    cv2.imwrite('./output_a.png', output_a)
+    cv2.imwrite('./output_b.png', output_b)
+    cv2.imwrite('./final.png', output_final)
 
     print('done')
 
