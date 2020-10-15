@@ -9,7 +9,7 @@ def get_data():
 
     first = True
 
-    for i in range (5, 20):
+    for i in range (5, 21):
 
         path = './super_frames/SuperFrameCPS' + str(i) + '.mat'
 
@@ -87,7 +87,7 @@ def localization(data):
     h = data.shape[0]
 
     peak_sums = np.zeros((3*h,3*w))
-    gradient = tgc_map(h, w, factor=3)
+    gradient = tgc_map(h, w, factor=4)
 
     # Init display text
     no_frames = data.shape[-1]
@@ -108,8 +108,14 @@ def localization(data):
         
         sample_im = cv2.resize(sample_im, (w*3, h*3), interpolation=cv2.INTER_CUBIC)
         
-        filtered = cv2.fastNlMeansDenoising(sample_im, templateWindowSize=3, searchWindowSize=19, h=7.0)
-        filtered[filtered<30] = 0
+        filtered = cv2.bilateralFilter(sample_im, d=7, sigmaColor=5, sigmaSpace=75)
+        
+        mask = cv2.adaptiveThreshold(filtered,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,\
+            cv2.THRESH_BINARY,17,-30)
+
+        mask = mask==0
+
+        filtered[mask] = 0
 
         peaks = find_peaks2d(filtered, sample_im)
 
@@ -124,36 +130,21 @@ def localization(data):
         cv2.putText(display,text_str, bottomLeftCornerOfText, font, fontScale, fontColor, lineType)
 
         cv2.imshow('frame analysis', display)
-        cv2.waitKey(75)
+        cv2.waitKey(20)
 
-    a = apply_contrast(peak_sums, gamma=0.1, relative_thresh=0.7)
+    a = peak_sums**0.2
+    b = apply_contrast(peak_sums, relative_thresh=0.1)
 
-    # Filter Rescaling Noise
-    fft = np.fft.fftshift(np.fft.fft2(a**0.2))
-
-    yaxis = (w*3)//2
-
-    fft[:100, yaxis-5:yaxis+5] = 0
-    fft[-100:, yaxis-5:yaxis+5] = 0
-
-    recon_signal = np.abs(np.fft.ifft2(np.fft.ifftshift(fft)))
-
-    b = apply_contrast(recon_signal, gamma=0.4, relative_thresh=0.6)
-
-    final = b**0.3
-
-    plt.imshow(final, cmap='hot')
+    plt.imshow(a, cmap='hot')
     plt.show()
 
     output_sums = cv2.merge([peak_sums,peak_sums,peak_sums])
     output_a = cv2.merge([a,a,a])
     output_b = cv2.merge([b,b,b])
-    output_final = cv2.merge([final,final,final])
 
     cv2.imwrite('./output_sums.png', output_sums)
     cv2.imwrite('./output_a.png', output_a)
     cv2.imwrite('./output_b.png', output_b)
-    cv2.imwrite('./final.png', output_final)
 
     print('done')
 
