@@ -27,6 +27,7 @@ def sim_params():
     std_u = 100                                #[um/sec]
     std_v = 0.5                                #[um/sec]
     FR = 100                                   #[frames/sec]
+    noise = 'light'                            #['light' or 'heavy']
 
     # Calculated Params
 
@@ -67,7 +68,8 @@ def sim_params():
         "std_u":std_u,             #[um/sec]
         "std_v":std_v,             #[um/sec]
         "psf":psf,             
-        "psf_resolution":psf_resolution
+        "psf_resolution":psf_resolution,
+        'noise':noise
     }
 
 def easygauss(X, mu, sigma):
@@ -129,7 +131,7 @@ def find_peaks2d(filtered_im, sampled_im):
     # Kill gaps -> Fill holes
     peaks = medfilt2d(peaks, (1,3))
     peaks = cv2.dilate(peaks, cv2.getStructuringElement(cv2.MORPH_RECT, (3,1)))
-
+    
     # Phase 2 - Use estimated CoM as base for peak-climbing
     peaks2 = np.zeros((filtered_im.shape[0]+2, filtered_im.shape[1]+2), np.uint8)
     labels = label(peaks)
@@ -239,10 +241,18 @@ def simulator(p):
     # Init Morphology Operators
 
     bubble = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,7))
-    cleaner = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+
+    noise_power = p['noise']
+
+    if noise_power == 'heavy':
+        noise_var = 0.05
+    elif noise_power == 'light':
+        noise_var = 0.001
+    else:
+        # default
+        noise_var = 0.01 
 
     FR = 1/p['dt']
-    lastmax = 1
 
     for t in range(1, p['sim_len']):
 
@@ -257,12 +267,6 @@ def simulator(p):
         mask = np.zeros((p['FOVx'], p['FOVy']), np.float32)
 
         if t % FR == 0:
-
-            thismax = localizations.max()
-
-            localizations = (localizations + localizations * lastmax/thismax)/(thismax + lastmax) 
-
-            lastmax = thismax
 
             bubbles1.append({
             'y':np.random.normal(p['Z1'], p['sigma_y'])*p['ppm'],
@@ -312,12 +316,21 @@ def simulator(p):
         sample_im = cv2.filter2D(mask,-1, p['psf'],borderType=cv2.BORDER_CONSTANT)
         mask = cv2.dilate(mask, bubble)
 
-        sample_im = random_noise(sample_im, mode='gaussian')
+        sample_im = random_noise(sample_im, mode='gaussian', var=noise_var)
 
         sample_im = (255*sample_im/sample_im.max()).astype(np.uint8)
 
-        filtered = cv2.fastNlMeansDenoising(sample_im, templateWindowSize=3, searchWindowSize=19, h=100.0)
-        filtered[filtered<175] = 0
+        if noise_power == 'heavy':
+            filtered = cv2.fastNlMeansDenoising(sample_im, templateWindowSize=3, searchWindowSize=19, h=100.0)
+            filtered[filtered<175] = 0
+            filtered[filtered>0] = sample_im[sample_im>0]
+        else:
+            
+            filtered = cv2.bilateralFilter(sample_im, d=9, sigmaColor=500, sigmaSpace=25)
+            filt_mask = cv2.adaptiveThreshold(filtered,255,cv2.ADAPTIVE_THRESH_MEAN_C,\
+            cv2.THRESH_BINARY, 21,-50)
+            filtered[filt_mask==0] = 0
+            filtered[filt_mask>0] = sample_im[filt_mask>0]
 
         peaks = find_peaks2d(filtered, sample_im)
         peaks = cv2.merge([peaks, peaks, peaks])

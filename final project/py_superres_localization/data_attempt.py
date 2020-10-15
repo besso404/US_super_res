@@ -9,7 +9,7 @@ def get_data():
 
     first = True
 
-    for i in range (5, 21):
+    for i in range (5, 6):
 
         path = './super_frames/SuperFrameCPS' + str(i) + '.mat'
 
