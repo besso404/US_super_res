@@ -4,12 +4,13 @@ from matplotlib import pyplot as plt
 from scipy.signal import convolve2d, medfilt2d
 from skimage.util import random_noise
 from skimage.measure import label, regionprops
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import cv2
 
 def sim_params():
 
     # Simulation Params
-    sim_len = 1000                             #[frames]
+    sim_len = 10000                            #[frames]
     phase1_len = 500                           #[frames]
     FOVx = 5000                                #[um]
     FOVy = 5000                                #[um]
@@ -101,16 +102,29 @@ def reliable_meas(X, pixels_per_umsec):
 
     return (np.mean(U)*pixels_per_umsec, np.mean(V)*pixels_per_umsec)
 
-def calc_speed(dP, pixels_per_umsec):
+def calc_speed(p0, p1, pixels_per_umsec, shape):
 
-    mu = np.mean(dP, axis=0).flatten()
+    dP = p1-p0
 
-    U = mu[0]
-    V = mu[1]
+    # Pixel-wise velocities
+    dU = np.zeros(shape=shape)
+    dV = np.zeros(shape=shape)
+    loc = p0.astype(np.int32).clip(0, shape[0]-1)
 
-    return (U*pixels_per_umsec, V*pixels_per_umsec)
+    dU[loc[:,1], loc[:,0]] = dP[:,0]
+    dV[loc[:,1], loc[:,0]] = dP[:,1]
+
+    # Instantaneous average velocities
+    inst_mu = np.mean(dP, axis=0).flatten()
+
+    inst_U = inst_mu[0]
+    inst_V = inst_mu[1]
+
+    # Next points estimate
+    next_pts = (p0 + inst_mu).reshape(-1,1,2)
 
 
+    return (inst_U*pixels_per_umsec, inst_V*pixels_per_umsec, dU, dV, next_pts)
 
 def find_peaks2d(filtered_im, sampled_im):
 
@@ -209,19 +223,24 @@ def simulator(p):
 
     # Init Optical Flow
     u,v = (0,0)
-    U = []
-    V = []
+    U = np.zeros(shape=(p['FOVx'], p['FOVy']))
+    V = np.zeros(shape=(p['FOVx'], p['FOVy']))
+    U_weights = np.zeros(shape=(p['FOVx'], p['FOVy']))
+    V_weights = np.zeros(shape=(p['FOVx'], p['FOVy']))
+
+    # next_pts = None
 
     # Parameters for lucas kanade optical flow
-    lk_params = dict( winSize  = (15,15),
+    lk_params = dict( winSize  = (25,25),
                     maxLevel = 1,
+                    minEigThreshold = 0.1,
                     criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.05))
 
     # params for ShiTomasi corner detection
     feature_params = dict( maxCorners = 100,
-                            qualityLevel = 0.3,
-                            minDistance = 7,
-                            blockSize = 7 )
+                            qualityLevel = 0.1,
+                            minDistance = 3,
+                            blockSize = 7)
 
     # Create some random colors
     color = np.random.randint(0,255,(500,3))
@@ -333,13 +352,16 @@ def simulator(p):
             filtered[filt_mask>0] = sample_im[filt_mask>0]
 
         peaks = find_peaks2d(filtered, sample_im)
-        peaks = cv2.merge([peaks, peaks, peaks])
 
         # Optical Flow
         if t >= p['phase1_len']:
 
             vessels = localizations[:,:,0]>0
-            frame_gray = np.copy(filtered) * vessels
+            peak_dots = np.copy(peaks) #* vessels
+            labels = label(peak_dots)
+            labels = 800*np.float32(labels/labels.max())**0.6
+
+            frame_gray = cv2.dilate(labels, cv2.getStructuringElement(cv2.MORPH_CROSS, (7,7))).astype(np.uint8)
             
             flowim = np.copy(localizations)
 
@@ -351,7 +373,7 @@ def simulator(p):
                 p0 = cv2.goodFeaturesToTrack(frame_gray, mask = None, **feature_params)
 
             else:
-            
+           
                 p1, st, err = cv2.calcOpticalFlowPyrLK(last_im, frame_gray, p0, None, **lk_params)
 
                 if p1 is not None:
@@ -360,9 +382,15 @@ def simulator(p):
                     good_new = p1[st==1]
                     good_old = p0[st==1]
                     
-                    u, v = calc_speed(p1-p0, FR/p['ppm'])
-                    U.append(u)
-                    V.append(v)
+                    if len(good_new) and len(good_old):
+
+                        u, v, dU, dV, next_pts = calc_speed(good_old, good_new, FR/p['ppm'], (p['FOVx'], p['FOVy']))
+
+                        U_weights[dU>0] += 1
+                        V_weights[dV>0] += 1
+
+                        U += dU
+                        V += dV
 
                     # draw the tracks
                     for i,(new,old) in enumerate(zip(good_new, good_old)):
@@ -388,6 +416,8 @@ def simulator(p):
             u_str = "U : %3f, [um/sec]" % (u)
             v_str = "V : %3f, [um/sec]" % (v)
 
+        
+        peaks = cv2.merge([peaks, peaks, peaks])
         localizations += peaks
 
         sample_im = (sample_im.astype(np.float32))/sample_im.max()
@@ -397,11 +427,9 @@ def simulator(p):
 
         display[0:p['FOVx'], 0:p['FOVy'], :] = image
         display[0:p['FOVx']:, p['FOVy']:, :] = sample_im/sample_im.max()
-        display[p['FOVx']:, :p['FOVy'], :] = localizations
-
+        display[p['FOVx']:, :p['FOVy'], :] = localizations/localizations.max()
 
         t_str = "Simulation Step: " + str(t)
-
         
         cv2.putText(display,
                     t_str,
@@ -438,20 +466,106 @@ def simulator(p):
                 bubbles2.pop(b)
                 exitted_frame2 = []
 
-    plt.subplot(121)
-    plt.hist(U)
-    plt.title('Recorded U Velocity')
-    plt.xlabel('Velocity [um/sec]')
-    plt.ylabel('No. Occurences')
-    plt.subplot(122)
-    plt.hist(V)
-    plt.title('Recorded V Velocity')
-    plt.xlabel('Velocity [um/sec]')
-    plt.show()
-    print('end')
+    U = U * FR/p['ppm']
+    V = V * FR/p['ppm']
+    U[U_weights>0] = U[U_weights>0]/U_weights[U_weights>0]
+    V[V_weights>0] = V[V_weights>0]/V_weights[V_weights>0]
+
+    localizations = localizations/localizations.max()
+
+    U[localizations[...,0]<0.1] = 0
+    V[localizations[...,0]<0.1] = 0
+
+    show_results(U, V, localizations, p['mu_u'])
+    analyze_flow(U, p['mu_u'])
+
+
 
         
+def show_results(U, V, super_res, U_real):
+
+    U[U>6000] = 0
+    U[U<-6000] = 0
+
+    V[V>6000] = 0
+    V[V<-6000] = 0
+
+    magn = (U**2 + V**2)**0.5
+    angle = np.arctan2(U, V)
+
+    labels = label(super_res[...,0]>0.3)
+    props_meas = regionprops(labels, intensity_image=U)
+    errors = []
+
+    for p in range(len(props_meas)):
+
+        avg_intens = props_meas[p].mean_intensity
         
+        err = (np.abs(avg_intens)-U_real)/U_real
+        errors.append(np.abs(err))
+
+        error = np.mean(errors)
+
+    print('Errors:')
+    print(errors)
+    print('Avg Error:')
+    print(error)
+
+    fig, ax = plt.subplots(1,3, figsize=(13,7))
+    
+    im1 = ax[0].imshow(super_res)
+    ax[0].set_title('Super-Resolution Image')
+    ax[0].get_xaxis().set_visible(False)
+    ax[0].get_yaxis().set_visible(False)
+
+    
+    im2 = ax[1].imshow(angle, cmap='seismic')
+    ax[1].set_title('Velocity Angle')
+    ax[1].get_xaxis().set_visible(False)
+    ax[1].get_yaxis().set_visible(False)
+
+    divider1 = make_axes_locatable(ax[1])
+    cax1 = divider1.append_axes("right", size="5%", pad=0.05)
+
+    ticks1 = np.linspace(-np.pi,np.pi,10, endpoint=True)
+    tick_labels1 = ["{:5.2f}".format(i) for i in ticks1]
+
+    cbar1 = fig.colorbar(im2, cax=cax1, orientation='vertical', ticks=ticks1, cmap='seismic')
+    cbar1.set_clim(-np.pi, np.pi)
+    cbar1.ax.set_yticklabels(tick_labels1)
+
+    im3 = ax[2].imshow(magn, cmap='hot')
+    ax[2].set_title('Velocity Magnitude')
+    ax[2].get_xaxis().set_visible(False)
+    ax[2].get_yaxis().set_visible(False)
+
+
+    ticks2 = np.linspace(magn.min(),magn.max(),10, endpoint=True)
+    tick_labels2 = ["{:5.2f}".format(i) for i in ticks2]
+
+    divider2 = make_axes_locatable(ax[2])
+    cax2 = divider2.append_axes("right", size="5%", pad=0.05)
+
+    cbar2 = fig.colorbar(im3, cax=cax2, orientation='vertical', ticks=ticks2, cmap='hot')
+    cbar2.set_clim(magn.min(), magn.max())
+    cbar2.ax.set_yticklabels(tick_labels2)  
+    
+    plt.show()
+
+def analyze_flow(U, U_real):
+
+    magn = np.abs(U)
+
+    U[magn>6000] = 0
+    
+    plt.hist(U[U.nonzero()], bins=50, alpha=0.55, edgecolor='k', label='recorded velocities')
+    plt.axvline(U_real, linewidth=1, color='k', label='expected velocity')
+    plt.axvline(-1*U_real, linewidth=1, color='k')
+
+    plt.title('Velocities Measurement Error')
+    plt.legend()
+
+    plt.show()
 
 
 if __name__ == "__main__":
