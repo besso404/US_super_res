@@ -11,7 +11,7 @@ def sim_params():
 
     # Simulation Params
     sim_len = 10000                            #[frames]
-    phase1_len = 500                           #[frames]
+    phase1_len = 1000                          #[frames]
     FOVx = 5000                                #[um]
     FOVy = 5000                                #[um]
     W = 2500                                   #[um]
@@ -124,7 +124,7 @@ def calc_speed(p0, p1, pixels_per_umsec, shape):
     next_pts = (p0 + inst_mu).reshape(-1,1,2)
 
 
-    return (inst_U*pixels_per_umsec, inst_V*pixels_per_umsec, dU, dV, next_pts)
+    return (inst_U*pixels_per_umsec, inst_V*pixels_per_umsec, dU, dV)
 
 def find_peaks2d(filtered_im, sampled_im):
 
@@ -194,12 +194,14 @@ def simulator(p):
     image = np.zeros((p['FOVx'], p['FOVy'], 3), np.float32)
     sample_im = np.copy(image)
     background = np.copy(true_image)
+    
+    flow_mask = np.zeros_like(true_image).astype(np.uint8)
 
     displaytop = np.hstack([true_image, sample])
     displaybottom = np.hstack([image, sample])
 
     display = np.vstack([displaytop, displaybottom])
-
+    
     # Bubbles
 
     bubbles1 = [{
@@ -221,27 +223,22 @@ def simulator(p):
     exitted_frame1 = []
     exitted_frame2 = []
 
+    # Helper fxn for motion tracking
+
+
     # Init Optical Flow
     u,v = (0,0)
     U = np.zeros(shape=(p['FOVx'], p['FOVy']))
     V = np.zeros(shape=(p['FOVx'], p['FOVy']))
     U_weights = np.zeros(shape=(p['FOVx'], p['FOVy']))
     V_weights = np.zeros(shape=(p['FOVx'], p['FOVy']))
-
-    # next_pts = None
-
-    # Parameters for lucas kanade optical flow
-    lk_params = dict( winSize  = (25,25),
-                    maxLevel = 1,
-                    minEigThreshold = 0.1,
-                    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.05))
-
-    # params for ShiTomasi corner detection
-    feature_params = dict( maxCorners = 100,
-                            qualityLevel = 0.1,
-                            minDistance = 3,
-                            blockSize = 7)
-
+    
+   # Parameters for lucas kanade optical flow
+    lk_params = dict( winSize  = (7,7),
+                  maxLevel = 0,
+                  minEigThreshold = 1,
+                  criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.75))
+    
     # Create some random colors
     color = np.random.randint(0,255,(500,3))
 
@@ -303,6 +300,9 @@ def simulator(p):
             't0':t
             })
 
+        
+            flow_mask = np.zeros_like(true_image).astype(np.uint8)
+
         for b in range(len(bubbles1)):
 
             bubbles1[b]['y'] = bubbles1[b]['y'] + (t-bubbles1[b]['t0'])*bubbles1[b]['v']
@@ -352,71 +352,63 @@ def simulator(p):
             filtered[filt_mask>0] = sample_im[filt_mask>0]
 
         peaks = find_peaks2d(filtered, sample_im)
+        vessels = localizations[:,:,0]>localizations.max()*0.3
 
         # Optical Flow
         if t >= p['phase1_len']:
 
-            vessels = localizations[:,:,0]>0
-            peak_dots = np.copy(peaks) #* vessels
-            labels = label(peak_dots)
-            labels = 800*np.float32(labels/labels.max())**0.6
-
-            frame_gray = cv2.dilate(labels, cv2.getStructuringElement(cv2.MORPH_CROSS, (7,7))).astype(np.uint8)
+            frame_gray = cv2.dilate(peaks*vessels, cv2.getStructuringElement(cv2.MORPH_CROSS, (9,9)))
+            
+            frame_gray = (255*frame_gray/frame_gray.max()).astype(np.uint8)
             
             flowim = np.copy(localizations)
 
             frame = cv2.merge([frame_gray, frame_gray, frame_gray])
-            flow_mask = np.zeros_like(frame).astype(np.uint8)
 
-            if t % 30 == 0 or t == p['phase1_len']:
+            p1, st, err = cv2.calcOpticalFlowPyrLK(last_im, frame_gray, p0, None, **lk_params)
 
-                p0 = cv2.goodFeaturesToTrack(frame_gray, mask = None, **feature_params)
+            if last_im.max() > 0:
 
-            else:
-           
-                p1, st, err = cv2.calcOpticalFlowPyrLK(last_im, frame_gray, p0, None, **lk_params)
+                st = [vessels[p[1], p[0]] for p in p1.astype(int).squeeze()]
 
-                if p1 is not None:
-
-                    # Select good points
-                    good_new = p1[st==1]
-                    good_old = p0[st==1]
-                    
-                    if len(good_new) and len(good_old):
-
-                        u, v, dU, dV, next_pts = calc_speed(good_old, good_new, FR/p['ppm'], (p['FOVx'], p['FOVy']))
-
-                        U_weights[dU>0] += 1
-                        V_weights[dV>0] += 1
-
-                        U += dU
-                        V += dV
-
-                    # draw the tracks
-                    for i,(new,old) in enumerate(zip(good_new, good_old)):
-                        a,b = new.ravel()
-                        c,d = old.ravel()
-                        flow_mask = cv2.line(flow_mask, (a,b),(c,d), color[i].tolist(), 2)
-                        frame = cv2.circle(frame,(a,b),5,color[i].tolist(),-1)
-                    
-                flowim = cv2.add(frame//2,flow_mask)
+                good_new = p1[st].reshape(-1,2)
+                good_old = p0[st].reshape(-1,2)
                 
-                p0 = good_new.reshape(-1,1,2)
-                
-                last_im = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                if len(good_new) and len(good_old):
+
+                    u, v, dU, dV = calc_speed(good_old, good_new, FR/p['ppm'], (p['FOVx'], p['FOVy']))
+
+                    U_weights[dU>0] += 1
+                    V_weights[dV>0] += 1
+
+                    U += dU
+                    V += dV
+
+                # draw the tracks
+                for i,(new,old) in enumerate(zip(good_new, good_old)):
+                    a,b = new.ravel().astype(int)
+                    c,d = old.ravel().astype(int)
+                    flow_mask = cv2.line(flow_mask, (a,b),(c,d), color[i].tolist(), 2)
+                    frame = cv2.circle(frame,(a,b),5,color[i].tolist(),-1)
+                    
+                flowim = cv2.add(frame//2,flow_mask).astype(np.float64)
 
                 # Edit display
 
-                flowim = flowim.astype(np.float64)
-
                 flowim = (flowim - flowim.min())/(flowim.max() - flowim.min())
+                
+                display[p['FOVx']:, p['FOVy']:, :] = flowim 
+
+                u_str = "U : %3f, [um/sec]" % (u)
+                v_str = "V : %3f, [um/sec]" % (v)
+
             
-            display[p['FOVx']:, p['FOVy']:, :] = flowim 
+            last_im = np.copy(frame_gray)
 
-            u_str = "U : %3f, [um/sec]" % (u)
-            v_str = "V : %3f, [um/sec]" % (v)
+        # Use peaks as init points
+        pointsy, pointsx = peaks.nonzero()
+        p0 = np.array([pointsx, pointsy]).T.reshape(-1, 1, 2).astype(np.float32)
 
-        
         peaks = cv2.merge([peaks, peaks, peaks])
         localizations += peaks
 
@@ -473,8 +465,8 @@ def simulator(p):
 
     localizations = localizations/localizations.max()
 
-    U[localizations[...,0]<0.1] = 0
-    V[localizations[...,0]<0.1] = 0
+    U[localizations[...,0]<0.3] = 0
+    V[localizations[...,0]<0.3] = 0
 
     show_results(U, V, localizations, p['mu_u'])
     analyze_flow(U, p['mu_u'])
@@ -484,11 +476,11 @@ def simulator(p):
         
 def show_results(U, V, super_res, U_real):
 
-    U[U>6000] = 0
-    U[U<-6000] = 0
+    U[U>4000] = 0
+    U[U<-4000] = 0
 
-    V[V>6000] = 0
-    V[V<-6000] = 0
+    V[V>4000] = 0
+    V[V<-4000] = 0
 
     magn = (U**2 + V**2)**0.5
     angle = np.arctan2(U, V)
@@ -531,7 +523,7 @@ def show_results(U, V, super_res, U_real):
     tick_labels1 = ["{:5.2f}".format(i) for i in ticks1]
 
     cbar1 = fig.colorbar(im2, cax=cax1, orientation='vertical', ticks=ticks1, cmap='seismic')
-    cbar1.set_clim(-np.pi, np.pi)
+    cbar1.mappable.set_clim(-np.pi, np.pi)
     cbar1.ax.set_yticklabels(tick_labels1)
 
     im3 = ax[2].imshow(magn, cmap='hot')
@@ -547,7 +539,7 @@ def show_results(U, V, super_res, U_real):
     cax2 = divider2.append_axes("right", size="5%", pad=0.05)
 
     cbar2 = fig.colorbar(im3, cax=cax2, orientation='vertical', ticks=ticks2, cmap='hot')
-    cbar2.set_clim(magn.min(), magn.max())
+    cbar2.mappable.set_clim(magn.min(), magn.max())
     cbar2.ax.set_yticklabels(tick_labels2)  
     
     plt.show()
