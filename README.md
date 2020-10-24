@@ -10,5 +10,7 @@
 - [x] Crossed Vessels
 - [x] Adjoining Vessels
 - [x] Move to Python
-- [ ] Select preferred OF method
-- [ ] Implement on real data
+- [x] Select preferred OF method
+- [x] Implement on real data
+- [x] Generate velocity map
+- [ ] Measure continuous velocity despite quantization error
