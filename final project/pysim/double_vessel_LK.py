@@ -2,6 +2,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy.signal import convolve2d, medfilt2d
+from scipy.spatial import distance
 from skimage.util import random_noise
 from skimage.measure import label, regionprops
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -10,8 +11,8 @@ import cv2
 def sim_params():
 
     # Simulation Params
-    sim_len = 10000                            #[frames]
-    phase1_len = 1000                          #[frames]
+    sim_len = 30000                            #[frames]
+    phase1_len = 10                            #[frames]
     FOVx = 5000                                #[um]
     FOVy = 5000                                #[um]
     W = 2500                                   #[um]
@@ -84,35 +85,84 @@ def elastic_collision(u0, v0):
 
     return u1, v1
 
-def reliable_meas(X, pixels_per_umsec):
+def group_velocity(track_vect, shape=(500,500)):
 
-    if len(X) < 2:
-        return (0,0)
+    U = np.zeros(shape=shape)
+    V = np.zeros(shape=shape)
 
-    variance_power = np.sum(np.var(X, axis=0), axis=1)
-
-    mu_X = np.mean(X, axis=0)
-
-    U = mu_X[:,0][variance_power < 3]
-    V = mu_X[:,1][variance_power < 3]
-
+    paths, num_paths = track_paths(track_vect)
     
-    if len(U) < 2:
-        return (0,0)
+    # Calculate velocities of paths
+    for p in range(num_paths):
 
-    return (np.mean(U)*pixels_per_umsec, np.mean(V)*pixels_per_umsec)
+        if len(paths[p])> 6:
 
-def calc_speed(p0, p1, pixels_per_umsec, shape):
+            dP = (paths[p][-1] - paths[p][0])/len(paths[p])
+
+            for node in paths[p]:
+
+                py, px = node.astype(np.int32).clip(0, shape[0]-1)
+
+                U[px, py] = dP[0]
+                V[px, py] = dP[1]
+
+    return U, V
+
+def track_paths(track_vect):
+
+    endpoints = track_vect[0]
+    paths = {}
+    path_no = 0
+
+    for t in range(1, len(track_vect)):
+
+        next_points = track_vect[t]
+
+        # Find Euclidean distance
+        dists = distance.cdist(next_points, endpoints)
+
+        mins = np.min(dists, axis=1)
+        argmins = np.argmin(dists, axis=1)
+
+        for i in range(len(mins)):
+
+            if mins[i] < 6:
+
+                origin = endpoints[argmins[i]]
+                node = next_points[i, :]
+
+                new_path = True
+
+                # Find path containing the origin     
+                for p in range(path_no):
+
+                    if np.any(np.all(paths[p]==origin, axis=1)):
+
+                        paths[p].append(node)
+                        new_path = False
+
+                # Doesn't belong to any path -> New path
+                if new_path:
+
+                    paths[path_no] = [origin, node]
+                    path_no += 1
+
+        endpoints = [paths[p][-1] for p in range(path_no)]
+        if len(endpoints):
+
+            for point in next_points:
+
+                if not np.any(np.all(point==np.array(endpoints), axis=1)):
+                    endpoints.append(point)
+        else:
+
+            endpoints = track_vect[t]
+
+    return paths, path_no
+
+def calc_speed(p0, p1):
 
     dP = p1-p0
-
-    # Pixel-wise velocities
-    dU = np.zeros(shape=shape)
-    dV = np.zeros(shape=shape)
-    loc = p0.astype(np.int32).clip(0, shape[0]-1)
-
-    dU[loc[:,1], loc[:,0]] = dP[:,0]
-    dV[loc[:,1], loc[:,0]] = dP[:,1]
 
     # Instantaneous average velocities
     inst_mu = np.mean(dP, axis=0).flatten()
@@ -120,11 +170,7 @@ def calc_speed(p0, p1, pixels_per_umsec, shape):
     inst_U = inst_mu[0]
     inst_V = inst_mu[1]
 
-    # Next points estimate
-    next_pts = (p0 + inst_mu).reshape(-1,1,2)
-
-
-    return (inst_U*pixels_per_umsec, inst_V*pixels_per_umsec, dU, dV)
+    return (inst_U, inst_V)
 
 def find_peaks2d(filtered_im, sampled_im):
 
@@ -223,9 +269,6 @@ def simulator(p):
     exitted_frame1 = []
     exitted_frame2 = []
 
-    # Helper fxn for motion tracking
-
-
     # Init Optical Flow
     u,v = (0,0)
     U = np.zeros(shape=(p['FOVx'], p['FOVy']))
@@ -234,10 +277,9 @@ def simulator(p):
     V_weights = np.zeros(shape=(p['FOVx'], p['FOVy']))
     
    # Parameters for lucas kanade optical flow
-    lk_params = dict( winSize  = (7,7),
+    lk_params = dict( winSize  = (17,17),
                   maxLevel = 0,
-                  minEigThreshold = 1,
-                  criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.75))
+                  criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.01))
     
     # Create some random colors
     color = np.random.randint(0,255,(500,3))
@@ -257,6 +299,15 @@ def simulator(p):
     # Init Morphology Operators
 
     bubble = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,7))
+    arrow = np.zeros((7,7), dtype=np.uint8)
+    tracking = []
+
+
+    for i in range(7):
+        for j in range(7):
+
+            if i-j ==3 or i+j == 3:
+                arrow[i,j] = 1
 
     noise_power = p['noise']
 
@@ -299,9 +350,6 @@ def simulator(p):
             'v':np.random.normal(0, p['std_v'])*p['ppm']*p['dt'],
             't0':t
             })
-
-        
-            flow_mask = np.zeros_like(true_image).astype(np.uint8)
 
         for b in range(len(bubbles1)):
 
@@ -357,7 +405,24 @@ def simulator(p):
         # Optical Flow
         if t >= p['phase1_len']:
 
-            frame_gray = cv2.dilate(peaks*vessels, cv2.getStructuringElement(cv2.MORPH_CROSS, (9,9)))
+            
+            if t % (FR//2) == 0:
+
+                flow_mask = np.zeros_like(true_image).astype(np.uint8)
+
+                if len(tracking):
+                    
+                    dU, dV = group_velocity(tracking)
+
+                    U_weights[dU.nonzero()] += 1
+                    V_weights[dV.nonzero()] += 1
+
+                    U += dU
+                    V += dV
+
+                    tracking = []
+
+            frame_gray = cv2.dilate(peaks, arrow)
             
             frame_gray = (255*frame_gray/frame_gray.max()).astype(np.uint8)
             
@@ -369,20 +434,14 @@ def simulator(p):
 
             if last_im.max() > 0:
 
-                st = [vessels[p[1], p[0]] for p in p1.astype(int).squeeze()]
-
-                good_new = p1[st].reshape(-1,2)
-                good_old = p0[st].reshape(-1,2)
+                good_new = p1.reshape(-1,2)
+                good_old = p0.reshape(-1,2)
                 
                 if len(good_new) and len(good_old):
 
-                    u, v, dU, dV = calc_speed(good_old, good_new, FR/p['ppm'], (p['FOVx'], p['FOVy']))
+                    u, v = calc_speed(good_old, good_new)
 
-                    U_weights[dU>0] += 1
-                    V_weights[dV>0] += 1
-
-                    U += dU
-                    V += dV
+                    tracking.append(good_new)
 
                 # draw the tracks
                 for i,(new,old) in enumerate(zip(good_new, good_old)):
@@ -399,10 +458,9 @@ def simulator(p):
                 
                 display[p['FOVx']:, p['FOVy']:, :] = flowim 
 
-                u_str = "U : %3f, [um/sec]" % (u)
-                v_str = "V : %3f, [um/sec]" % (v)
+                u_str = "U : %3f, [um/sec]" % (u * FR/p['ppm'])
+                v_str = "V : %3f, [um/sec]" % (v * FR/p['ppm'])
 
-            
             last_im = np.copy(frame_gray)
 
         # Use peaks as init points
@@ -439,7 +497,6 @@ def simulator(p):
                     font_color,
                     line_type)
 
-        
         cv2.putText(display,
                     v_str,
                     v_bottom_left_corner_of_text,
@@ -471,16 +528,13 @@ def simulator(p):
     show_results(U, V, localizations, p['mu_u'])
     analyze_flow(U, p['mu_u'])
 
-
-
-        
 def show_results(U, V, super_res, U_real):
 
-    U[U>4000] = 0
-    U[U<-4000] = 0
+    U[U>3000] = 0
+    U[U<-3000] = 0
 
-    V[V>4000] = 0
-    V[V<-4000] = 0
+    V[V>3000] = 0
+    V[V<-3000] = 0
 
     magn = (U**2 + V**2)**0.5
     angle = np.arctan2(U, V)
@@ -548,7 +602,7 @@ def analyze_flow(U, U_real):
 
     magn = np.abs(U)
 
-    U[magn>6000] = 0
+    U[magn>4000] = 0
     
     plt.hist(U[U.nonzero()], bins=50, alpha=0.55, edgecolor='k', label='recorded velocities')
     plt.axvline(U_real, linewidth=1, color='k', label='expected velocity')
