@@ -11,7 +11,7 @@ import cv2
 def sim_params():
 
     # Simulation Params
-    sim_len = 30000                            #[frames]
+    sim_len = 20000                            #[frames]
     phase1_len = 10                            #[frames]
     FOVx = 5000                                #[um]
     FOVy = 5000                                #[um]
@@ -538,6 +538,7 @@ def show_results(U, V, super_res, U_real):
 
     magn = (U**2 + V**2)**0.5
     angle = np.arctan2(U, V)
+    angle = (angle + np.pi)/2
 
     labels = label(super_res[...,0]>0.3)
     props_meas = regionprops(labels, intensity_image=U)
@@ -573,11 +574,11 @@ def show_results(U, V, super_res, U_real):
     divider1 = make_axes_locatable(ax[1])
     cax1 = divider1.append_axes("right", size="5%", pad=0.05)
 
-    ticks1 = np.linspace(-np.pi,np.pi,10, endpoint=True)
-    tick_labels1 = ["{:5.2f}".format(i) for i in ticks1]
+    ticks1 = np.linspace(0, np.pi,10, endpoint=True)
+    tick_labels1 = ["{:5.2f} [rad]".format(i) for i in ticks1]
 
     cbar1 = fig.colorbar(im2, cax=cax1, orientation='vertical', ticks=ticks1, cmap='seismic')
-    cbar1.mappable.set_clim(-np.pi, np.pi)
+    cbar1.mappable.set_clim(0, np.pi)
     cbar1.ax.set_yticklabels(tick_labels1)
 
     im3 = ax[2].imshow(magn, cmap='hot')
@@ -587,7 +588,7 @@ def show_results(U, V, super_res, U_real):
 
 
     ticks2 = np.linspace(magn.min(),magn.max(),10, endpoint=True)
-    tick_labels2 = ["{:5.2f}".format(i) for i in ticks2]
+    tick_labels2 = ["{:5.2f} [um/sec]".format(i) for i in ticks2]
 
     divider2 = make_axes_locatable(ax[2])
     cax2 = divider2.append_axes("right", size="5%", pad=0.05)
@@ -609,6 +610,8 @@ def analyze_flow(U, U_real):
     plt.axvline(-1*U_real, linewidth=1, color='k')
 
     plt.title('Velocities Measurement Error')
+    plt.xlabel('Velocity [um/sec]')
+    plt.ylabel('No. Instances')
     plt.legend()
 
     plt.show()
