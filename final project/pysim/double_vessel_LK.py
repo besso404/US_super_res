@@ -11,7 +11,7 @@ import cv2
 def sim_params():
 
     # Simulation Params
-    sim_len = 20000                            #[frames]
+    sim_len = 10000                            #[frames]
     phase1_len = 10                            #[frames]
     FOVx = 5000                                #[um]
     FOVy = 5000                                #[um]
