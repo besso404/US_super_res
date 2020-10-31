@@ -11,7 +11,7 @@ import cv2
 def sim_params():
 
     # Simulation Params
-    sim_len = 10000                            #[frames]
+    sim_len = 30000                            #[frames]
     phase1_len = 10                            #[frames]
     FOVx = 5000                                #[um]
     FOVy = 5000                                #[um]
@@ -172,9 +172,8 @@ def calc_speed(p0, p1):
 
     return (inst_U, inst_V)
 
-def find_peaks2d(filtered_im, sampled_im):
+def find_peaks2d(filtered_im, sampled_im, min_dist=7):
 
-    
     # Phase 1 - Isolate all peaks
     peaks = np.zeros_like(sampled_im)
 
@@ -213,6 +212,7 @@ def find_peaks2d(filtered_im, sampled_im):
     output = np.zeros_like(filtered_im, dtype=np.float64)
     labels = label(peaks2)
     props3 = regionprops(labels, intensity_image=sampled_im)
+    found_peaks = []
 
     for obj3 in props3:
 
@@ -221,6 +221,38 @@ def find_peaks2d(filtered_im, sampled_im):
         cy = int(c[0])
         cx = int(c[1])
         output[cy, cx] = 255
+
+        found_peaks.append(np.array([cy,cx]))
+
+    # Phase 4 - Prevent double peaks
+    if len(found_peaks):
+        dists = distance.pdist(found_peaks)
+
+        dist_mat = np.triu(distance.squareform(dists))
+
+        bad_i, bad_j = ((dist_mat<min_dist) & (dist_mat>0)).nonzero()
+
+        num_bad_pairs = bad_i.shape[0]
+
+        if num_bad_pairs:
+
+            for t in range(num_bad_pairs):
+
+                i = bad_i[t]
+                j = bad_j[t]
+
+                cy1, cx1 = found_peaks[i]
+                cy2, cx2 = found_peaks[j]
+
+                # Erase bad peaks
+                output[cy1, cx1] = 0
+                output[cy2, cx2] = 0 
+
+                # Correct peak is their CoM
+                cx = (cx1+cx2)//2
+                cy = (cy1+cy2)//2
+
+                output[cy,cx] = 255
 
     return output
 
