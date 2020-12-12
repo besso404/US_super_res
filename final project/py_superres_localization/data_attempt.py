@@ -1,4 +1,5 @@
 from matplotlib import pyplot as plt
+from matplotlib import cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.io import loadmat
 import cv2
@@ -31,8 +32,8 @@ def find_peaks2d(filtered_im, sampled_im, min_dist=5):
         peaks[mask] = sampled_im[mask]
 
     # Kill gaps -> Fill holes
-    peaks = medfilt2d(peaks, (1,3))
-    peaks = cv2.dilate(peaks, cv2.getStructuringElement(cv2.MORPH_RECT, (3,1)))
+    # peaks = medfilt2d(peaks, (1,3))
+    # peaks = cv2.dilate(peaks, cv2.getStructuringElement(cv2.MORPH_RECT, (3,1)))
     
     # Phase 2 - Use estimated CoM as base for peak-climbing
     peaks2 = np.zeros((filtered_im.shape[0]+2, filtered_im.shape[1]+2), np.uint8)
@@ -106,10 +107,20 @@ def tgc_map(h, w, factor=2):
     gradient_ = np.array([scale for col in range(w)])
     return gradient_.T
 
+def log_scale(im, db=1):
+
+    im = (im - im.min()) / (im.max()-im.min())
+
+    b = 1/(10**(db/20))
+    a = 1-b
+
+    im = 20 * np.log10(a * im + b)
+    return im
+
 def localization():
 
     # Determine SupFrame Numbers
-    super_frames = range(1,61)
+    super_frames = range(1,20)
 
     data0 = get_data(super_frames[0])
 
@@ -117,6 +128,7 @@ def localization():
     w0 = data0.shape[1]
     h0 = data0.shape[0]
 
+    db_scale = 10
     scale = 2
 
     w = int(scale * w0)
@@ -163,6 +175,14 @@ def localization():
             if i-j ==3 or i+j == 3:
                 arrow[i,j] = 1
 
+
+    # Use model
+
+    sr = cv2.dnn_superres.DnnSuperResImpl_create()
+
+    sr.readModel('./models/FSRCNN_x2.pb')
+    sr.setModel('fsrcnn', 2)
+
     for s in super_frames:
 
         data = get_data(s)
@@ -170,19 +190,16 @@ def localization():
         for i in range(0,200):
 
             sample_im = data[:,:,i]
-            sample_im = sample_im + sample_im * gradient
+            sample_im = log_scale(sample_im, db=db_scale) + db_scale
             sample_im = np.uint8(255*(sample_im/sample_im.max()))
-            
-            sample_im = cv2.resize(sample_im, (w, h), interpolation=cv2.INTER_AREA)
-            
+
+            sample_im = sr.upsample(sample_im)
             filtered = cv2.bilateralFilter(sample_im, d=7, sigmaColor=150, sigmaSpace=1)
             
             mask = cv2.adaptiveThreshold(filtered,255,cv2.ADAPTIVE_THRESH_MEAN_C,\
                 cv2.THRESH_BINARY,17,-35)
 
             filtered[mask==0] = 0
-
-            filtered = cv2.dilate(filtered, cv2.getStructuringElement(cv2.MORPH_CROSS, (5,5)))
 
             peaks = find_peaks2d(filtered, sample_im)
 
@@ -241,41 +258,42 @@ def localization():
             pointsy, pointsx = peaks.nonzero()
             p0 = np.array([pointsx, pointsy]).T.reshape(-1, 1, 2).astype(np.float32)
 
-            peak_sums += peaks
+            peak_sums += peaks/255
 
             text_str = 'Processed Superframe %d Frame %d/%d'%(s, i, no_frames)
             cv2.putText(display,text_str, bottomLeftCornerOfText, font, fontScale, fontColor, lineType)
 
             cv2.imshow('frame analysis', display)
             cv2.waitKey(20)
-
+    
+    cv2.destroyAllWindows()
     a = apply_contrast(peak_sums, gamma=0.1, relative_thresh=0.4)
 
-    plt.imshow(a, cmap='afmhot')
-    plt.show()
-
-    output_sums = cv2.merge([peak_sums,peak_sums,peak_sums])
-    output_a = cv2.merge([a,a,a])
-
-
-    cv2.imwrite('./output_sums.png', output_sums)
-    cv2.imwrite('./output_a.png', output_a)
-    cv2.imwrite('./output_flow.png', flow_im)
-
-    # Convert pixels/frame to mm/sec
-    U = (U * FR/ppmx)/(1000*scale)
-    V = (V * FR/ppmy)/(1000*scale)
+    plt.figure(1)
+    plt.imshow(a, cmap='hot')
+    plt.title('Super-Resolution Image')
+    plt.axis('off')
 
     U[U_weights>0] = U[U_weights>0]/U_weights[U_weights>0]
     V[V_weights>0] = V[V_weights>0]/V_weights[V_weights>0]
 
-    localizations = peak_sums/peak_sums.max()
+    # Conversion factor for pixels/frame to mm/sec
+    factorx = FR/ppmx/(1000*scale)
+    factory = FR/ppmy/(1000*scale)
 
     # Use localization mask
     U[a<0.3] = 0
     V[a<0.3] = 0
 
-    show_results(U, V, a)
+    show_velocity_map(a, U,V,factorx, factory)
+
+    plt.show()
+
+    # Save collected data
+    np.save('./a.npy', a)
+    np.save('./peak_sums.npy', peak_sums)
+    np.save('./U.npy', U*factorx)
+    np.save('./V.npy', V*factory)
 
     print('done')
 
@@ -394,73 +412,35 @@ def calc_speed(p0, p1):
 
     return (inst_U, inst_V)
 
-def show_results(U, V, super_res):
+def show_velocity_map(superres, U,V,tx,ty):
 
-    magn = (U**2 + V**2)**0.5
-    angle = np.arctan2(U, V)
+    h, w = U.shape
 
-    magn[magn>5] = 0
-    
-    cv2.imwrite('./output_magn.png', cv2.merge([magn, magn, magn]))
-    cv2.imwrite('./output_angle.png', cv2.merge([angle, angle, angle]))
+    X, Y = np.meshgrid(np.arange(U.shape[1]), np.arange(U.shape[0]))
 
-    fig, ax = plt.subplots(1,3, figsize=(13,7))
-    
-    im1 = ax[0].imshow(super_res, cmap='afmhot')
-    ax[0].set_title('Super-Resolution Image')
-    ax[0].get_xaxis().set_visible(False)
-    ax[0].get_yaxis().set_visible(False)
+    U2 = U * tx
+    V2 = V * tx
 
-    
-    im2 = ax[1].imshow(angle, cmap='hsv')
-    ax[1].set_title('Velocity Angle')
-    ax[1].get_xaxis().set_visible(False)
-    ax[1].get_yaxis().set_visible(False)
+    U2 = cv2.GaussianBlur(U2, (3,3), 0)
+    V2 = cv2.GaussianBlur(V2, (3,3), 0)
 
-    divider1 = make_axes_locatable(ax[1])
-    cax1 = divider1.append_axes("right", size="5%", pad=0.05)
+    M = np.hypot(U2, V2)
 
-    ticks1 = np.linspace(-np.pi, np.pi,10, endpoint=True)
-    tick_labels1 = ["{:5.2f} [rad]".format(i) for i in ticks1]
+    U2[M>10] = 0
+    V2[M>10] = 0
+    M[M>10] = 0
 
-    cbar1 = fig.colorbar(im2, cax=cax1, orientation='vertical', ticks=ticks1, cmap='hsv')
-    cbar1.mappable.set_clim(0, np.pi)
-    cbar1.ax.set_yticklabels(tick_labels1)
+    U2[U2.nonzero()] /= M[U2.nonzero()]
+    V2[V2.nonzero()] /= M[V2.nonzero()]
 
-    im3 = ax[2].imshow(magn, cmap='hot')
-    ax[2].set_title('Velocity Magnitude')
-    ax[2].get_xaxis().set_visible(False)
-    ax[2].get_yaxis().set_visible(False)
+    plt.figure(2)
+    plt.imshow(superres, cmap='gray')
+    plt.quiver(X,Y,U2,V2, M, cmap=plt.cm.nipy_spectral, units='inches', scale=10, angles='xy')
+    plt.axis('off')
 
-
-    ticks2 = np.linspace(magn.min(),magn.max(),10, endpoint=True)
-    tick_labels2 = ["{:5.2f} [um/sec]".format(i) for i in ticks2]
-
-    divider2 = make_axes_locatable(ax[2])
-    cax2 = divider2.append_axes("right", size="5%", pad=0.05)
-
-    cbar2 = fig.colorbar(im3, cax=cax2, orientation='vertical', ticks=ticks2, cmap='hot')
-    cbar2.mappable.set_clim(magn.min(), magn.max())
-    cbar2.ax.set_yticklabels(tick_labels2)  
-    
-    plt.show()
-
-def analyze_flow(U, U_real):
-
-    magn = np.abs(U)
-
-    U[magn>4000] = 0
-    
-    plt.hist(U[U.nonzero()], bins=50, alpha=0.55, edgecolor='k', label='recorded velocities')
-    plt.axvline(U_real, linewidth=1, color='k', label='expected velocity')
-    plt.axvline(-1*U_real, linewidth=1, color='k')
-
-    plt.title('Velocities Measurement Error')
-    plt.xlabel('Velocity [um/sec]')
-    plt.ylabel('No. Instances')
-    plt.legend()
-
-    plt.show()
+    clb = plt.colorbar()
+    clb.ax.set_title('mm/sec')
+    plt.title('Velocity Map')
 
 if __name__ == "__main__":
     localization()

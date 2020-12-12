@@ -432,7 +432,6 @@ def simulator(p):
             filtered[filt_mask>0] = sample_im[filt_mask>0]
 
         peaks = find_peaks2d(filtered, sample_im)
-        vessels = localizations[:,:,0]>localizations.max()*0.3
 
         # Optical Flow
         if t >= p['phase1_len']:
