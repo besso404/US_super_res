@@ -120,7 +120,7 @@ def log_scale(im, db=1):
 def localization():
 
     # Determine SupFrame Numbers
-    super_frames = range(1,20)
+    super_frames = range(1,60)
 
     data0 = get_data(super_frames[0])
 

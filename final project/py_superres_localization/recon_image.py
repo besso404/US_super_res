@@ -7,10 +7,8 @@ def post_processing():
     sums = np.load('./peak_sums.npy')
     U = np.load('./U.npy')
     V = np.load('./V.npy')
-
-    sums = sums**0.3
-
-    sums2 = np.uint8(255*sums / sums.max())
+    db=40
+    sums2 = np.uint8(255*(sums+20) / db)
 
     mask = cv2.adaptiveThreshold(sums2,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,\
                     cv2.THRESH_BINARY,17,0)
@@ -21,10 +19,9 @@ def post_processing():
 
 
     background = cv2.GaussianBlur(sums, (7,7), 0.3)
-    background = background/background.max()
+    background = (background+db)/(background.max()+db)
     foreground = foreground/foreground.max()
     background[mask.nonzero()] += 0.3*foreground[mask.nonzero()]
-    background = background**1.3
 
     plt.figure(1)
     plt.imshow(background, cmap='hot')
