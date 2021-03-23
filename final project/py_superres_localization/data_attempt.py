@@ -8,13 +8,23 @@ from scipy.spatial import distance
 from skimage.measure import label, regionprops
 from scipy.signal import medfilt2d
 
-def get_data(super_frame_num):
+def get_rfdata(super_frame_num):
 
-    path = './super_frames/SuperFrameCPS' + str(super_frame_num) + '.mat'
+    # path = './super_frames/SuperFrameCPS' + str(super_frame_num) + '.mat'
+    path = './super_frames/iqsuperframe.mat'
 
     mat = loadmat(path)
 
     return np.abs(mat['Data'])
+
+def get_iqdata(super_frame_num):
+
+    # path = './agar/1.6v'
+    path = './22.3.21/2Fibers_3V_14-20mm_4'
+
+    mat = loadmat(path)
+
+    return np.hypot(mat['IData_tot'], mat['QData_tot'])
 
 def find_peaks2d(filtered_im, sampled_im, min_dist=5):
 
@@ -120,13 +130,18 @@ def log_scale(im, db=1):
 def localization():
 
     # Determine SupFrame Numbers
-    super_frames = range(1,60)
+    super_frames = range(1,2)
 
-    data0 = get_data(super_frames[0])
+    data0 = get_iqdata(super_frames[0])
 
     # Init Rescale and TGC
     w0 = data0.shape[1]
     h0 = data0.shape[0]
+
+    wants_record = True
+    if wants_record:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter('./cps_tracks.mp4', fourcc, 50, (4*w0, 2*h0))
 
     db_scale = 10
     scale = 2
@@ -134,12 +149,16 @@ def localization():
     w = int(scale * w0)
     h = int(scale * h0)
 
-    FR = 300
-    ppmx = 1/330
-    ppmy = 1/110
+    # FR = 300
+    # ppmx = 1/330
+    # ppmy = 1/110
+
+    FR = 121
+    ppmx = w0/(25*1e3)
+    ppmy = h0/(11*1e3)
 
     peak_sums = np.zeros((h,w))
-    gradient = tgc_map(h0, w0, factor=4)
+    gradient = tgc_map(h0, w0, factor=1)
     last_im = np.zeros((h,w), dtype=np.uint8)
     flow_im = np.zeros((h,w,3), dtype=np.uint8)
 
@@ -167,11 +186,10 @@ def localization():
 
     arrow = np.zeros((7,7), dtype=np.uint8)
     tracking = []
-    tracking_interval = 40
+    tracking_interval = 20
 
     for i in range(7):
         for j in range(7):
-
             if i-j ==3 or i+j == 3:
                 arrow[i,j] = 1
 
@@ -185,9 +203,9 @@ def localization():
 
     for s in super_frames:
 
-        data = get_data(s)
+        data = get_iqdata(s)
 
-        for i in range(0,200):
+        for i in range(0,800):
 
             sample_im = data[:,:,i]
             sample_im = log_scale(sample_im, db=db_scale) + db_scale
@@ -204,15 +222,15 @@ def localization():
             peaks = find_peaks2d(filtered, sample_im)
 
             peak_show = cv2.dilate(peaks, cv2.getStructuringElement(cv2.MORPH_CROSS, (5,5)))
+            sample_im = filtered.copy()
             sample_im[peak_show>0] = 0
 
             display = cv2.merge([sample_im, sample_im, np.uint8(peak_show)+sample_im])
 
             # Optical Flow
-            if s > super_frames[0]:
-
+            #if s > super_frames[0]:
+            if i > 0:
                 if i % tracking_interval == 0:
-
                     if len(tracking):
                         
                         dU, dV, flow_tracks = group_velocity(tracking, (h, w, 3), tracking_interval)
@@ -228,24 +246,18 @@ def localization():
                         tracking = []
 
                 frame_gray = cv2.dilate(peaks, arrow)
-                
                 frame_gray = (255*frame_gray/frame_gray.max()).astype(np.uint8)
-
                 p1, st, err = cv2.calcOpticalFlowPyrLK(last_im, frame_gray, p0, None, **lk_params)
 
                 if last_im.max() > 0:
-
                     good_new = p1.reshape(-1,2)
                     good_old = p0.reshape(-1,2)
                     
                     if len(good_new) and len(good_old):
-
                         u, v = calc_speed(good_old, good_new)
-
                         tracking.append(good_new)
 
                     # Edit display
-
                     display = np.hstack([display, flow_im])
 
                     u_str = "U : %3f, [um/sec]" % (u * FR/ppmx)
@@ -263,9 +275,12 @@ def localization():
             text_str = 'Processed Superframe %d Frame %d/%d'%(s, i, no_frames)
             cv2.putText(display,text_str, bottomLeftCornerOfText, font, fontScale, fontColor, lineType)
 
+            if wants_record:
+                out.write(display)
+
             cv2.imshow('frame analysis', display)
             cv2.waitKey(20)
-    
+    out.release()
     cv2.destroyAllWindows()
     a = apply_contrast(peak_sums, gamma=0.1, relative_thresh=0.4)
 
@@ -426,9 +441,9 @@ def show_velocity_map(superres, U,V,tx,ty):
 
     M = np.hypot(U2, V2)
 
-    U2[M>10] = 0
-    V2[M>10] = 0
-    M[M>10] = 0
+    # U2[M>10] = 0
+    # V2[M>10] = 0
+    # M[M>10] = 0
 
     U2[U2.nonzero()] /= M[U2.nonzero()]
     V2[V2.nonzero()] /= M[V2.nonzero()]

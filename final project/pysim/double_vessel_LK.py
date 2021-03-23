@@ -148,14 +148,12 @@ def track_paths(track_vect):
                     path_no += 1
 
         endpoints = [paths[p][-1] for p in range(path_no)]
+
         if len(endpoints):
-
             for point in next_points:
-
                 if not np.any(np.all(point==np.array(endpoints), axis=1)):
                     endpoints.append(point)
         else:
-
             endpoints = track_vect[t]
 
     return paths, path_no
@@ -546,8 +544,6 @@ def simulator(p):
                 bubbles2.pop(b)
                 exitted_frame2 = []
 
-    U = U * FR/p['ppm']
-    V = V * FR/p['ppm']
     U[U_weights>0] = U[U_weights>0]/U_weights[U_weights>0]
     V[V_weights>0] = V[V_weights>0]/V_weights[V_weights>0]
 
@@ -556,6 +552,10 @@ def simulator(p):
     U[localizations[...,0]<0.3] = 0
     V[localizations[...,0]<0.3] = 0
 
+    # show_velocity_map(localizations, U, V, FR/p['ppm'], FR/p['ppm'])
+    
+    U = U * FR/p['ppm']
+    V = V * FR/p['ppm']
     show_results(U, V, localizations, p['mu_u'])
     analyze_flow(U, p['mu_u'])
 
@@ -647,6 +647,33 @@ def analyze_flow(U, U_real):
 
     plt.show()
 
+def show_velocity_map(superres, U,V,tx,ty):
+
+    h, w = U.shape
+
+    X, Y = np.meshgrid(np.arange(U.shape[1]), np.arange(U.shape[0]))
+
+    U2 = U * tx
+    V2 = V * tx
+
+    M = np.hypot(U2, V2)
+
+    U2[M>2000] = 0
+    V2[M>2000] = 0
+    M[M>2000] = 0
+
+    U2[U2.nonzero()] /= M[U2.nonzero()]
+    V2[V2.nonzero()] /= M[V2.nonzero()]
+
+    plt.figure(2)
+    plt.imshow(superres, cmap='gray')
+    plt.quiver(X,Y,U2,V2, M, cmap=plt.cm.nipy_spectral, units='inches', scale=10, angles='xy')
+    plt.axis('off')
+
+    clb = plt.colorbar()
+    clb.ax.set_title('mm/sec')
+    plt.title('Velocity Map')
+    plt.show()
 
 if __name__ == "__main__":
     p = sim_params()

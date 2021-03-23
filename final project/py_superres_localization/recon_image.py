@@ -2,29 +2,31 @@ import numpy as np
 from matplotlib import pyplot as plt
 import cv2
 
-
 def post_processing():
-    sums = np.load('./peak_sums.npy')
-    U = np.load('./U.npy')
-    V = np.load('./V.npy')
-    db=40
-    sums2 = np.uint8(255*(sums+20) / db)
 
-    mask = cv2.adaptiveThreshold(sums2,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,\
-                    cv2.THRESH_BINARY,17,0)
+    sums = np.load('./10db/peak_sums.npy')
+    U = np.load('./10db/U.npy')
+    V = np.load('./10db/V.npy')
+    db=25
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
-    foreground = cv2.dilate(sums2, kernel)
-    foreground[mask==0] = 0
+    sums2 = np.uint8(255*(log_scale(sums,db)+db)/db)
+
+    lpf = cv2.GaussianBlur(sums, (7,7), 0.9)
+    lpf2 = cv2.GaussianBlur(sums2, (7,7), 0.5)
+
+    lpf = np.uint8(255*(log_scale(lpf, db)+db)/db)
+
+    mask = cv2.adaptiveThreshold(lpf,255,cv2.ADAPTIVE_THRESH_MEAN_C,\
+                    cv2.THRESH_BINARY,7,0)
 
 
-    background = cv2.GaussianBlur(sums, (7,7), 0.3)
-    background = (background+db)/(background.max()+db)
-    foreground = foreground/foreground.max()
-    background[mask.nonzero()] += 0.3*foreground[mask.nonzero()]
+    mask[sums<20] = 0
+    lpf2[mask==0] = 0
+    out = lpf2/lpf2.max() + lpf/255
+    out = log_scale(out, db)
 
     plt.figure(1)
-    plt.imshow(background, cmap='hot')
+    plt.imshow(out, cmap='hot')
     plt.title('Reconstructed and Processed Super-Resolution Image')
     plt.axis('off')
 
@@ -33,7 +35,7 @@ def post_processing():
     V[mask==0] = 0
 
     plt.figure(2)
-    show_velocity_map(background, U, V, 1, 1)
+    show_velocity_map(out, U, V, 1, 1)
     plt.show()
 
 def show_velocity_map(superres, U,V,tx,ty):
