@@ -7,6 +7,7 @@ import numpy as np
 from scipy.spatial import distance
 from skimage.measure import label, regionprops
 from scipy.signal import medfilt2d
+from scipy.interpolate import interp1d
 
 def get_rfdata(super_frame_num):
 
@@ -17,13 +18,11 @@ def get_rfdata(super_frame_num):
 
     return np.abs(mat['Data'])
 
-def get_iqdata(super_frame_num):
+def get_iqdata(path, super_frame_num):
+    # mat = loadmat(path)
+    # mat = loadmat(path+'part%d'%(super_frame_num) + '_low_dose')
 
-    # path = './agar/1.6v'
-    path = './22.3.21/2Fibers_3V_14-20mm_4'
-
-    mat = loadmat(path)
-
+    mat = loadmat(path+'%d'%(super_frame_num))
     return np.hypot(mat['IData_tot'], mat['QData_tot'])
 
 def find_peaks2d(filtered_im, sampled_im, min_dist=5):
@@ -130,9 +129,11 @@ def log_scale(im, db=1):
 def localization():
 
     # Determine SupFrame Numbers
-    super_frames = range(1,2)
+    super_frames = range(4,5)
+    folder = './22.3.21/velocity3/'
+    path = '1mm_'
 
-    data0 = get_iqdata(super_frames[0])
+    data0 = get_iqdata(folder+path, super_frames[0])
 
     # Init Rescale and TGC
     w0 = data0.shape[1]
@@ -149,13 +150,12 @@ def localization():
     w = int(scale * w0)
     h = int(scale * h0)
 
-    # FR = 300
-    # ppmx = 1/330
-    # ppmy = 1/110
+    FR = 137.88
+    fovx = [-12.5, 12.5]
+    fovy = [14, 18]
 
-    FR = 121
-    ppmx = w0/(25*1e3)
-    ppmy = h0/(11*1e3)
+    ppmx = w0/((fovx[1]-fovx[0])*1e3)
+    ppmy = h0/((fovy[1]-fovy[0])*1e3)
 
     peak_sums = np.zeros((h,w))
     gradient = tgc_map(h0, w0, factor=1)
@@ -203,9 +203,9 @@ def localization():
 
     for s in super_frames:
 
-        data = get_iqdata(s)
+        data = get_iqdata(folder+path, s)
 
-        for i in range(0,800):
+        for i in range(0,1600):
 
             sample_im = data[:,:,i]
             sample_im = log_scale(sample_im, db=db_scale) + db_scale
@@ -280,14 +280,14 @@ def localization():
 
             cv2.imshow('frame analysis', display)
             cv2.waitKey(20)
+
     out.release()
     cv2.destroyAllWindows()
     a = apply_contrast(peak_sums, gamma=0.1, relative_thresh=0.4)
 
-    plt.figure(1)
-    plt.imshow(a, cmap='hot')
-    plt.title('Super-Resolution Image')
-    plt.axis('off')
+    plt.figure(1, figsize=(15,10))
+    mip = np.mean(data, axis=-1)
+    show_vessel_width(a, mip, fovx, fovy, folder+path)
 
     U[U_weights>0] = U[U_weights>0]/U_weights[U_weights>0]
     V[V_weights>0] = V[V_weights>0]/V_weights[V_weights>0]
@@ -300,15 +300,10 @@ def localization():
     U[a<0.3] = 0
     V[a<0.3] = 0
 
-    show_velocity_map(a, U,V,factorx, factory)
+    plt.figure(2)
+    show_velocity_map(a, U,V,factorx, factory, folder+path)
 
     plt.show()
-
-    # Save collected data
-    np.save('./a.npy', a)
-    np.save('./peak_sums.npy', peak_sums)
-    np.save('./U.npy', U*factorx)
-    np.save('./V.npy', V*factory)
 
     print('done')
 
@@ -427,7 +422,7 @@ def calc_speed(p0, p1):
 
     return (inst_U, inst_V)
 
-def show_velocity_map(superres, U,V,tx,ty):
+def show_velocity_map(superres, U,V,tx,ty, experiment):
 
     h, w = U.shape
 
@@ -441,10 +436,6 @@ def show_velocity_map(superres, U,V,tx,ty):
 
     M = np.hypot(U2, V2)
 
-    # U2[M>10] = 0
-    # V2[M>10] = 0
-    # M[M>10] = 0
-
     U2[U2.nonzero()] /= M[U2.nonzero()]
     V2[V2.nonzero()] /= M[V2.nonzero()]
 
@@ -456,6 +447,59 @@ def show_velocity_map(superres, U,V,tx,ty):
     clb = plt.colorbar()
     clb.ax.set_title('mm/sec')
     plt.title('Velocity Map')
+    plt.savefig(experiment + 'velocity.png')
+
+def show_vessel_width(superres, mip, fovx, fovy, experiment):
+    
+    h0, w0 = mip.shape
+    hf, wf = superres.shape
+
+    z0 = np.around(np.linspace(fovy[0], fovy[1], h0//8),2)
+    x0 = np.around(np.linspace(fovx[0], fovx[1], w0//16),2)
+    zf = np.around(np.linspace(fovy[0], fovy[1], hf//16),2)
+    xf = np.around(np.linspace(fovx[0], fovx[1], wf//32),2)
+
+    plt.subplot(2,2,1)
+    plt.imshow(mip, cmap='hot')
+    plt.title('Max Intensity Projection')
+    plt.yticks(np.linspace(0, h0, h0//8), z0)
+    plt.xticks(np.linspace(0, w0, w0//16), x0, rotation=45)
+    plt.ylabel('Z [mm]')
+    plt.xlabel('X [mm]')
+
+    plt.subplot(2,2,2)
+    plt.imshow(superres, cmap='hot')
+    plt.title('Super-Resolution Image')
+    plt.yticks(np.linspace(0, hf, hf//16), zf)
+    plt.xticks(np.linspace(0, wf, wf//32), xf, rotation=45)
+    plt.ylabel('Z [mm]')
+    plt.xlabel('X [mm]')
+
+    f = interp1d(np.linspace(0,h0,h0), mip[:, mip.shape[1]//2])
+    mip_cut = f(np.linspace(0,h0,h0*2))
+    mip_cut /= mip_cut.max()
+
+    sup_cut = superres[:, superres.shape[1]//2]
+    sup_cut /= sup_cut.max()
+    
+    plt.subplot(2,1,2)
+    plt.plot(mip_cut, 'k')
+    plt.plot(sup_cut, 'r')
+    plt.title('Vessel Cross-Section')
+    plt.xticks(np.linspace(0, hf, hf//16), zf)
+    plt.xlabel('Z [mm]')
+    plt.ylabel('Normalized Intensity')
+    plt.legend(['Max Intensity', 'Super-Resolution'])
+
+    plt.savefig(experiment + 'resolution.png')
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
     localization()
